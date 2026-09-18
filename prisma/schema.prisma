@@ -1,0 +1,109 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum WorkdayStatus {
+  planned
+  working
+  paused
+  finished
+  cancelled
+}
+
+enum SessionType {
+  work
+  break
+}
+
+enum TelegramMessageType {
+  start
+  pause
+  resume
+  end
+}
+
+enum TelegramMessageStatus {
+  pending
+  sent
+  failed
+  cancelled
+}
+
+model Settings {
+  id                    Int      @id @default(1)
+  timezone              String   @default("Europe/Berlin")
+  defaultStartTime      String   @default("08:45")
+  telegramChatId        String   @default("")
+  telegramBotToken      String   @default("") @db.VarChar(1000)
+  startMessageTemplate  String   @db.Text
+  pauseMessageTemplate  String   @db.Text
+  resumeMessageTemplate String   @db.Text
+  endMessageTemplate    String   @db.Text
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model Workday {
+  id                String        @id @default(cuid())
+  status            WorkdayStatus  @default(planned)
+  scheduledStartAt  DateTime?
+  actualStartAt     DateTime?
+  endedAt           DateTime?
+  activeKey         String?       @unique
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  sessions          WorkSession[]
+  telegramMessages  TelegramMessage[]
+
+  @@index([status, scheduledStartAt])
+  @@index([createdAt])
+}
+
+model WorkSession {
+  id        String      @id @default(cuid())
+  workdayId String
+  type      SessionType
+  startedAt DateTime
+  endedAt   DateTime?
+  activeKey String?     @unique
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  workday   Workday     @relation(fields: [workdayId], references: [id], onDelete: Cascade)
+  tasks     Task[]
+
+  @@index([workdayId, type, startedAt])
+}
+
+model Task {
+  id            String      @id @default(cuid())
+  workSessionId String
+  content       String      @db.VarChar(500)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  workSession   WorkSession @relation(fields: [workSessionId], references: [id], onDelete: Cascade)
+
+  @@index([workSessionId, createdAt])
+}
+
+model TelegramMessage {
+  id            String                 @id @default(cuid())
+  workdayId     String
+  type          TelegramMessageType
+  content       String                 @db.Text
+  scheduledFor  DateTime
+  sentAt        DateTime?
+  status        TelegramMessageStatus  @default(pending)
+  errorMessage  String?                @db.Text
+  lockedAt      DateTime?
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+  workday       Workday                @relation(fields: [workdayId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledFor])
+  @@index([workdayId, type])
+}
