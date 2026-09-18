@@ -1,6 +1,8 @@
-import { db } from "@/lib/db"
-import { createClockifyExport } from "@/lib/clockify-export"
-import { localDateInputValue, localTimeInputValue } from "@/lib/time"
+import { resolve } from "node:path"
+
+import { configureDatabase, getDb } from "../src/main/db"
+import { createClockifyExport } from "../src/shared/clockify-export"
+import { localDateInputValue, localTimeInputValue } from "../src/shared/time"
 import {
   createPlannedOrImmediateWorkday,
   createTask,
@@ -10,7 +12,10 @@ import {
   pauseWorkday,
   resumeWorkday,
   startScheduledWorkday,
-} from "@/lib/workday-service"
+} from "../src/main/workday-service"
+
+configureDatabase(resolve("prisma/dev.db"))
+const db = getDb()
 
 let workdayId = ""
 let plannedWorkdayId = ""

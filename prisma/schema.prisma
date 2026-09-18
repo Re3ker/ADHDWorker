@@ -3,35 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
-}
-
-enum WorkdayStatus {
-  planned
-  working
-  paused
-  finished
-  cancelled
-}
-
-enum SessionType {
-  work
-  break
-}
-
-enum TelegramMessageType {
-  start
-  pause
-  resume
-  end
-}
-
-enum TelegramMessageStatus {
-  pending
-  sent
-  failed
-  cancelled
 }
 
 model Settings {
@@ -39,18 +12,20 @@ model Settings {
   timezone              String   @default("Europe/Berlin")
   defaultStartTime      String   @default("08:45")
   telegramChatId        String   @default("")
-  telegramBotToken      String   @default("") @db.VarChar(1000)
-  startMessageTemplate  String   @db.Text
-  pauseMessageTemplate  String   @db.Text
-  resumeMessageTemplate String   @db.Text
-  endMessageTemplate    String   @db.Text
+  telegramBotToken      String   @default("")
+  minimizeOnClose       Boolean  @default(true)
+  desktopNotifications  Boolean  @default(false)
+  startMessageTemplate  String
+  pauseMessageTemplate  String
+  resumeMessageTemplate String
+  endMessageTemplate    String
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 }
 
 model Workday {
   id                String        @id @default(cuid())
-  status            WorkdayStatus  @default(planned)
+  status            String        @default("planned")
   scheduledStartAt  DateTime?
   actualStartAt     DateTime?
   endedAt           DateTime?
@@ -67,7 +42,7 @@ model Workday {
 model WorkSession {
   id        String      @id @default(cuid())
   workdayId String
-  type      SessionType
+  type      String
   startedAt DateTime
   endedAt   DateTime?
   activeKey String?     @unique
@@ -82,7 +57,7 @@ model WorkSession {
 model Task {
   id            String      @id @default(cuid())
   workSessionId String
-  content       String      @db.VarChar(500)
+  content       String
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   workSession   WorkSession @relation(fields: [workSessionId], references: [id], onDelete: Cascade)
@@ -93,12 +68,12 @@ model Task {
 model TelegramMessage {
   id            String                 @id @default(cuid())
   workdayId     String
-  type          TelegramMessageType
-  content       String                 @db.Text
+  type          String
+  content       String
   scheduledFor  DateTime
   sentAt        DateTime?
-  status        TelegramMessageStatus  @default(pending)
-  errorMessage  String?                @db.Text
+  status        String                 @default("pending")
+  errorMessage  String?
   lockedAt      DateTime?
   createdAt     DateTime               @default(now())
   updatedAt     DateTime               @updatedAt

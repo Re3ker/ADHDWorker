@@ -1,0 +1,29 @@
+name: Release Windows app
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --legacy-peer-deps
+      - run: node -e "const pkg = require('./package.json'); if ('v' + pkg.version !== process.env.GITHUB_REF_NAME) throw new Error('Git-Tag und package.json-Version müssen übereinstimmen.')"
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run smoke
+      - run: npm run package:win
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: release/*.exe
