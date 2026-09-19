@@ -13,6 +13,9 @@ model Settings {
   defaultStartTime      String   @default("08:45")
   telegramChatId        String   @default("")
   telegramBotToken      String   @default("")
+  clockifyApiKey        String   @default("")
+  lastClockifyWorkspaceId String?
+  lastClockifyProjectId String?
   minimizeOnClose       Boolean  @default(true)
   desktopNotifications  Boolean  @default(false)
   startMessageTemplate  String
@@ -34,6 +37,7 @@ model Workday {
   updatedAt         DateTime       @updatedAt
   sessions          WorkSession[]
   telegramMessages  TelegramMessage[]
+  clockifySyncEntries ClockifySyncEntry[]
 
   @@index([status, scheduledStartAt])
   @@index([createdAt])
@@ -58,11 +62,38 @@ model Task {
   id            String      @id @default(cuid())
   workSessionId String
   content       String
+  workspaceId   String?
+  workspaceName String?
+  projectId     String?
+  projectName   String?
+  startedAt     DateTime?
+  endedAt       DateTime?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   workSession   WorkSession @relation(fields: [workSessionId], references: [id], onDelete: Cascade)
 
   @@index([workSessionId, createdAt])
+}
+
+model ClockifySyncEntry {
+  id              String      @id @default(cuid())
+  workdayId       String
+  workSessionId   String
+  workspaceId     String
+  projectId       String
+  description     String
+  startedAt       DateTime
+  endedAt         DateTime
+  status          String      @default("pending")
+  clockifyEntryId String?
+  errorMessage    String?
+  attemptedAt     DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  workday         Workday     @relation(fields: [workdayId], references: [id], onDelete: Cascade)
+
+  @@index([workdayId, status])
+  @@index([status])
 }
 
 model TelegramMessage {

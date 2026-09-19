@@ -12,7 +12,7 @@ optionale Ausgabe und Clockify ein kopierbarer Export.
 ## Starten
 
 ```bash
-npm install
+npm install --legacy-peer-deps
 npm run dev
 ```
 

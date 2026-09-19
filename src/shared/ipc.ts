@@ -8,11 +8,17 @@ export const startWorkdayInput = z.object({
 export const taskInput = z.object({
   workSessionId: z.string().min(1),
   content: z.string().trim().min(1).max(500),
+  workspaceId: z.string().min(1).nullable().optional(),
+  workspaceName: z.string().trim().min(1).max(300).nullable().optional(),
+  projectId: z.string().min(1).nullable().optional(),
+  projectName: z.string().trim().min(1).max(300).nullable().optional(),
 })
 
 export const updateTaskInput = z.object({ taskId: z.string().min(1), content: z.string().trim().min(1).max(500) })
 export const taskIdInput = z.string().min(1)
 export const messageIdInput = z.object({ messageId: z.string().min(1) })
+export const workspaceIdInput = z.object({ workspaceId: z.string().min(1) })
+export const clockifySyncIdInput = z.object({ syncEntryId: z.string().min(1) })
 
 export type StartWorkdayInput = z.infer<typeof startWorkdayInput>
 export type TaskInput = z.infer<typeof taskInput>

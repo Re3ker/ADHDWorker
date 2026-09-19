@@ -3,6 +3,10 @@ import { z } from "zod"
 export const taskSchema = z.object({
   workSessionId: z.string().min(1),
   content: z.string().trim().min(1, "Bitte beschreibe die Aufgabe.").max(500),
+  workspaceId: z.string().min(1).nullable().optional(),
+  workspaceName: z.string().trim().min(1).max(300).nullable().optional(),
+  projectId: z.string().min(1).nullable().optional(),
+  projectName: z.string().trim().min(1).max(300).nullable().optional(),
 })
 
 export const updateTaskSchema = z.object({
@@ -14,6 +18,7 @@ export const settingsSchema = z.object({
   defaultStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Ungültige Uhrzeit."),
   telegramChatId: z.string().trim().max(100),
   telegramBotToken: z.string().trim().max(1000),
+  clockifyApiKey: z.string().trim().max(1000),
   minimizeOnClose: z.coerce.boolean(),
   desktopNotifications: z.coerce.boolean(),
   timezone: z.string().min(1).max(100),

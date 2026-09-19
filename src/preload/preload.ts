@@ -1,8 +1,8 @@
 import { contextBridge, ipcRenderer } from "electron"
 
-import { messageIdInput, startWorkdayInput, taskIdInput, taskInput, updateTaskInput } from "../shared/ipc"
+import { clockifySyncIdInput, messageIdInput, startWorkdayInput, taskIdInput, taskInput, updateTaskInput, workspaceIdInput } from "../shared/ipc"
 import { settingsSchema } from "../shared/validations"
-import type { DashboardData, HistoryDay, SettingsData, ActionResponse } from "../shared/types"
+import type { DashboardData, HistoryDay, SettingsData, ActionResponse, ClockifyOption } from "../shared/types"
 
 type UpdateInfo = { version: string; releaseUrl: string }
 
@@ -26,6 +26,9 @@ const api = {
   deleteTask: (taskId: unknown) => invoke<ActionResponse>("task:delete", taskIdInput.parse(taskId)),
   updateSettings: (input: unknown) => invoke<ActionResponse>("settings:update", settingsSchema.parse(input)),
   retryTelegram: (messageId: unknown) => invoke<ActionResponse>("telegram:retry", messageIdInput.parse({ messageId })),
+  getClockifyWorkspaces: () => invoke<{ ok: boolean; error?: string; items: ClockifyOption[] }>("clockify:workspaces"),
+  getClockifyProjects: (input: unknown) => invoke<{ ok: boolean; error?: string; items: ClockifyOption[] }>("clockify:projects", workspaceIdInput.parse(input)),
+  retryClockify: (syncEntryId: unknown) => invoke<ActionResponse>("clockify:retry", clockifySyncIdInput.parse({ syncEntryId })),
   setMinimizeOnClose: (value: unknown) => {
     if (typeof value === "boolean") void invoke<void>("desktop:set-minimize-on-close", value)
   },

@@ -4,6 +4,7 @@ import { getDb } from "./db"
 import { zonedLocalDateTime, formatDate, formatTime } from "../shared/time"
 import { DEFAULT_TEMPLATES, renderMessageTemplate, tasksForMessage } from "../shared/message-templates"
 import { settingsSchema, startWorkdaySchema, taskSchema, updateTaskSchema } from "../shared/validations"
+import { createClockifyTimeEntry, listClockifyProjects, listClockifyWorkspaces } from "./clockify"
 
 const ACTIVE_WORKDAY_KEY = "current-workday"
 const ACTIVE_SESSION_KEY = "current-session"
@@ -63,7 +64,7 @@ export async function getCurrentWorkday() {
         orderBy: { startedAt: "asc" },
         include: { tasks: { orderBy: { createdAt: "asc" } } },
       },
-      telegramMessages: { orderBy: { createdAt: "asc" } },
+      telegramMessages: { orderBy: { createdAt: "asc" } }, clockifySyncEntries: { orderBy: { startedAt: "asc" } },
     },
   })
 }
@@ -76,7 +77,7 @@ export async function getWorkdayById(id: string) {
         orderBy: { startedAt: "asc" },
         include: { tasks: { orderBy: { createdAt: "asc" } } },
       },
-      telegramMessages: { orderBy: { createdAt: "asc" } },
+      telegramMessages: { orderBy: { createdAt: "asc" } }, clockifySyncEntries: { orderBy: { startedAt: "asc" } },
     },
   })
 }
@@ -90,7 +91,7 @@ export async function getFinishedWorkdays() {
         orderBy: { startedAt: "asc" },
         include: { tasks: { orderBy: { createdAt: "asc" } } },
       },
-      telegramMessages: { orderBy: { createdAt: "asc" } },
+      telegramMessages: { orderBy: { createdAt: "asc" } }, clockifySyncEntries: { orderBy: { startedAt: "asc" } },
     },
   })
 }
@@ -172,6 +173,11 @@ async function createMessage(
   })
 }
 
+async function closeLastTask(tx: Prisma.TransactionClient, sessionId: string, endedAt: Date) {
+  const task = await tx.task.findFirst({ where: { workSessionId: sessionId }, orderBy: { createdAt: "desc" } })
+  if (task) await tx.task.update({ where: { id: task.id }, data: { endedAt } })
+}
+
 export async function pauseWorkday() {
   return getDb().$transaction(async (tx) => {
     const workday = await tx.workday.findUnique({ where: { activeKey: ACTIVE_WORKDAY_KEY } })
@@ -181,6 +187,7 @@ export async function pauseWorkday() {
 
     const now = new Date()
     const settings = await ensureSettings(tx)
+    await closeLastTask(tx, session.id, now)
     await tx.workSession.update({ where: { id: session.id }, data: { endedAt: now, activeKey: null } })
     await tx.workday.update({ where: { id: workday.id }, data: { status: "paused" } })
     const breakSession = await tx.workSession.create({ data: { workdayId: workday.id, type: "break", startedAt: now, activeKey: ACTIVE_SESSION_KEY } })
@@ -204,6 +211,7 @@ export async function resumeWorkday() {
 
     const now = new Date()
     const settings = await ensureSettings(tx)
+    await closeLastTask(tx, session.id, now)
     await tx.workSession.update({ where: { id: session.id }, data: { endedAt: now, activeKey: null } })
     const nextSession = await tx.workSession.create({ data: { workdayId: workday.id, type: "work", startedAt: now, activeKey: ACTIVE_SESSION_KEY } })
     await tx.workday.update({ where: { id: workday.id }, data: { status: "working" } })
@@ -234,18 +242,35 @@ export async function finishWorkday() {
       tasks: tasksForMessage(session.tasks),
     })
     const message = await createMessage(tx, { workdayId: workday.id, type: "end", content })
+    const completed = await tx.workday.findUnique({ where: { id: workday.id }, include: { sessions: { where: { type: "work" }, orderBy: { startedAt: "asc" }, include: { tasks: { orderBy: { createdAt: "asc" } } } } } })
+    if (completed) {
+      for (const completedSession of completed.sessions) {
+        let group: { workspaceId: string; projectId: string; description: string[]; startedAt: Date; endedAt: Date } | null = null
+        for (const task of completedSession.tasks) {
+          if (!task.workspaceId || !task.projectId || !task.startedAt || !task.endedAt) { if (group) { await tx.clockifySyncEntry.create({ data: { workdayId: workday.id, workSessionId: completedSession.id, ...group, description: group.description.join(", ") } }); group = null }; continue }
+          if (group && group.workspaceId === task.workspaceId && group.projectId === task.projectId && group.endedAt.getTime() === task.startedAt.getTime()) { group.description.push(task.content); group.endedAt = task.endedAt }
+          else { if (group) await tx.clockifySyncEntry.create({ data: { workdayId: workday.id, workSessionId: completedSession.id, ...group, description: group.description.join(", ") } }); group = { workspaceId: task.workspaceId, projectId: task.projectId, description: [task.content], startedAt: task.startedAt, endedAt: task.endedAt } }
+        }
+        if (group) await tx.clockifySyncEntry.create({ data: { workdayId: workday.id, workSessionId: completedSession.id, ...group, description: group.description.join(", ") } })
+      }
+    }
     return { workdayId: workday.id, messageId: message.id }
   })
 }
 
-export async function createTask(input: { workSessionId: string; content: string }) {
+export async function createTask(input: { workSessionId: string; content: string; workspaceId?: string | null; workspaceName?: string | null; projectId?: string | null; projectName?: string | null }) {
   const parsed = taskSchema.parse(input)
   return getDb().$transaction(async (tx) => {
     const session = await tx.workSession.findUnique({ where: { id: parsed.workSessionId }, include: { workday: true } })
     if (!session || session.workday.status !== "working" || session.endedAt || session.activeKey !== ACTIVE_SESSION_KEY) {
       fail("Aufgaben können nur in der offenen Arbeitssession erfasst werden.")
     }
-    return tx.task.create({ data: parsed })
+    const now = new Date()
+    const previous = await tx.task.findFirst({ where: { workSessionId: session.id }, orderBy: { createdAt: "desc" } })
+    const startedAt = previous?.endedAt ?? session.startedAt
+    const task = await tx.task.create({ data: { ...parsed, workspaceId: parsed.workspaceId ?? null, workspaceName: parsed.workspaceName ?? null, projectId: parsed.projectId ?? null, projectName: parsed.projectName ?? null, startedAt, endedAt: now } })
+    if (task.workspaceId && task.projectId) await tx.settings.update({ where: { id: 1 }, data: { lastClockifyWorkspaceId: task.workspaceId, lastClockifyProjectId: task.projectId } })
+    return task
   })
 }
 
@@ -268,12 +293,33 @@ export async function getTasksForSession(workSessionId: string) {
 
 export async function updateSettings(input: unknown) {
   const parsed = settingsSchema.parse(input)
-  const { telegramBotToken, ...settings } = parsed
+  const { telegramBotToken, clockifyApiKey, ...settings } = parsed
   await ensureSettings()
   return getDb().settings.update({
     where: { id: 1 },
-    data: { ...settings, ...(telegramBotToken ? { telegramBotToken } : {}) },
+    data: { ...settings, ...(telegramBotToken ? { telegramBotToken } : {}), ...(clockifyApiKey ? { clockifyApiKey } : {}) },
   })
+}
+
+export async function getClockifyWorkspaces() { const settings = await ensureSettings(); return listClockifyWorkspaces(settings.clockifyApiKey) }
+export async function getClockifyProjects(workspaceId: string) { const settings = await ensureSettings(); return listClockifyProjects(settings.clockifyApiKey, workspaceId) }
+
+export async function syncClockifyEntry(syncEntryId: string) {
+  const entry = await getDb().clockifySyncEntry.findUnique({ where: { id: syncEntryId } })
+  if (!entry || entry.status === "synced") return
+  try {
+    const settings = await ensureSettings()
+    const response = await createClockifyTimeEntry(settings.clockifyApiKey, entry)
+    await getDb().clockifySyncEntry.update({ where: { id: entry.id }, data: { status: "synced", clockifyEntryId: response.id ?? null, errorMessage: null, attemptedAt: new Date() } })
+  } catch (error) {
+    await getDb().clockifySyncEntry.update({ where: { id: entry.id }, data: { status: "failed", errorMessage: error instanceof Error ? error.message : "Clockify-Sync fehlgeschlagen.", attemptedAt: new Date() } })
+    throw error
+  }
+}
+
+export async function syncClockifyWorkday(workdayId: string) {
+  const entries = await getDb().clockifySyncEntry.findMany({ where: { workdayId, status: { not: "synced" } } })
+  await Promise.all(entries.map(async (entry) => { try { await syncClockifyEntry(entry.id) } catch { /* retained for retry */ } }))
 }
 
 export async function getMessage(id: string) {

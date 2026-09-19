@@ -1,4 +1,4 @@
-import type { DashboardData, HistoryDay, SettingsData, ActionResponse } from "../shared/types"
+import type { DashboardData, HistoryDay, SettingsData, ActionResponse, ClockifyOption } from "../shared/types"
 import type { StartWorkdayInput, TaskInput, UpdateTaskInput } from "../shared/ipc"
 
 declare global {
@@ -17,8 +17,11 @@ declare global {
       createTask(input: TaskInput): Promise<ActionResponse>
       updateTask(input: UpdateTaskInput): Promise<ActionResponse>
       deleteTask(taskId: string): Promise<ActionResponse>
-      updateSettings(input: SettingsData & { telegramBotToken: string }): Promise<ActionResponse>
+      updateSettings(input: SettingsData & { telegramBotToken: string; clockifyApiKey: string }): Promise<ActionResponse>
       retryTelegram(messageId: string): Promise<ActionResponse>
+      getClockifyWorkspaces(): Promise<{ ok: boolean; error?: string; items: ClockifyOption[] }>
+      getClockifyProjects(input: { workspaceId: string }): Promise<{ ok: boolean; error?: string; items: ClockifyOption[] }>
+      retryClockify(syncEntryId: string): Promise<ActionResponse>
       setMinimizeOnClose(value: boolean): void
       notify(payload: { title: string; body: string }): void
       onChanged(callback: () => void): () => void

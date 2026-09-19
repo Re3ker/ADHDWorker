@@ -8,8 +8,11 @@ export type SessionData = {
   type: SessionType
   startedAt: string
   endedAt: string | null
-  tasks: Array<{ id: string; content: string }>
+  tasks: Array<{ id: string; content: string; workspaceId: string | null; workspaceName: string | null; projectId: string | null; projectName: string | null; startedAt: string | null; endedAt: string | null }>
 }
+
+export type ClockifyOption = { id: string; name: string }
+export type ClockifySyncData = { id: string; description: string; workspaceId: string; projectId: string; startedAt: string; endedAt: string; status: "pending" | "synced" | "failed"; errorMessage: string | null }
 
 export type MessageData = {
   id: string
@@ -27,12 +30,16 @@ export type WorkdayData = {
   endedAt: string | null
   sessions: SessionData[]
   messages: MessageData[]
+  clockifySyncEntries: ClockifySyncData[]
 }
 
 export type SettingsData = {
   defaultStartTime: string
   telegramChatId: string
   hasTelegramBotToken: boolean
+  hasClockifyApiKey: boolean
+  lastClockifyWorkspaceId: string | null
+  lastClockifyProjectId: string | null
   timezone: string
   minimizeOnClose: boolean
   desktopNotifications: boolean
@@ -44,7 +51,7 @@ export type SettingsData = {
 
 export type DashboardData = {
   workday: WorkdayData | null
-  settings: Pick<SettingsData, "defaultStartTime" | "timezone" | "desktopNotifications">
+  settings: Pick<SettingsData, "defaultStartTime" | "timezone" | "desktopNotifications" | "hasClockifyApiKey" | "lastClockifyWorkspaceId" | "lastClockifyProjectId">
   defaultDate: string
   defaultTime: string
 }
@@ -55,6 +62,7 @@ export type HistoryDay = {
   actualStartAt: string | null
   sessions: SessionData[]
   messages: Array<Pick<MessageData, "id" | "type" | "status" | "errorMessage">>
+  clockifySyncEntries: ClockifySyncData[]
 }
 
 export type ActionResponse = { ok: true; messageId?: string } | { ok: false; error: string }

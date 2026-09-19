@@ -6,6 +6,7 @@ export type SettingsSaveState = "pending" | "saving" | "saved" | "error" | null
 export function SettingsForm({ initial, onSaveState }: { initial: SettingsData; onSaveState?: (state: SettingsSaveState) => void }) {
   const [values, setValues] = useState(initial)
   const [token, setToken] = useState("")
+  const [clockifyKey, setClockifyKey] = useState("")
   const [error, setError] = useState<string | null>(null)
   const initialized = useRef(false)
 
@@ -23,12 +24,12 @@ export function SettingsForm({ initial, onSaveState }: { initial: SettingsData; 
     setError(null)
     const timeout = window.setTimeout(async () => {
       onSaveState?.("saving")
-      const result = await window.adhdworker.updateSettings({ ...values, telegramBotToken: token })
-      if (result.ok) { window.adhdworker.setMinimizeOnClose(values.minimizeOnClose); onSaveState?.("saved"); if (token) setToken("") }
+      const result = await window.adhdworker.updateSettings({ ...values, telegramBotToken: token, clockifyApiKey: clockifyKey })
+      if (result.ok) { window.adhdworker.setMinimizeOnClose(values.minimizeOnClose); onSaveState?.("saved"); if (token) setToken(""); if (clockifyKey) setClockifyKey("") }
       else { setError(result.error || "Einstellungen konnten nicht gespeichert werden."); onSaveState?.("error") }
     }, 650)
     return () => window.clearTimeout(timeout)
-  }, [token, values])
+  }, [token, clockifyKey, values])
 
   return (
     <form onSubmit={(event) => event.preventDefault()} className="space-y-6">
@@ -54,6 +55,11 @@ export function SettingsForm({ initial, onSaveState }: { initial: SettingsData; 
             Telegram-Chat-ID
             <input name="telegramChatId" value={values.telegramChatId} onChange={(event) => update("telegramChatId", event.target.value)} placeholder="z. B. -1001234567890" className="min-h-11 w-full rounded-xl border border-input bg-background px-3 font-normal outline-none focus-visible:ring-3 focus-visible:ring-ring/50" />
             <span className="block text-xs font-normal text-muted-foreground">Wird ebenfalls in der Datenbank gespeichert.</span>
+          </label>
+          <label className="space-y-2 text-sm font-medium sm:col-span-2">
+            Clockify-API-Key
+            <input name="clockifyApiKey" type="password" value={clockifyKey} onChange={(event) => { setClockifyKey(event.target.value); onSaveState?.("pending") }} placeholder={values.hasClockifyApiKey ? "Key ist hinterlegt — leer lassen zum Beibehalten" : "Deinen Clockify-API-Key einfügen"} className="min-h-11 w-full rounded-xl border border-input bg-background px-3 font-normal outline-none focus-visible:ring-3 focus-visible:ring-ring/50" autoComplete="new-password" />
+            <span className="block text-xs font-normal text-muted-foreground">Der Key bleibt im Main-Prozess und wird nie an die Oberfläche zurückgegeben.</span>
           </label>
         </div>
       </section>

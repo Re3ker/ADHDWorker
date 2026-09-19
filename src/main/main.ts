@@ -4,7 +4,7 @@ import { existsSync, mkdirSync } from "node:fs"
 import { join } from "node:path"
 
 import { localDateInputValue, localTimeInputValue } from "../shared/time"
-import { messageIdInput, startWorkdayInput, taskIdInput, taskInput, updateTaskInput } from "../shared/ipc"
+import { clockifySyncIdInput, messageIdInput, startWorkdayInput, taskIdInput, taskInput, updateTaskInput, workspaceIdInput } from "../shared/ipc"
 import type { DashboardData, HistoryDay, SettingsData, WorkdayData, ActionResponse } from "../shared/types"
 import { configureDatabase, disconnectDatabase } from "./db"
 import {
@@ -18,6 +18,10 @@ import {
   getSettings,
   pauseWorkday,
   resumeWorkday,
+  getClockifyProjects,
+  getClockifyWorkspaces,
+  syncClockifyEntry,
+  syncClockifyWorkday,
   updateSettings,
   updateTask,
 } from "./workday-service"
@@ -25,6 +29,7 @@ import { deliverTelegramMessage, retryTelegramMessage } from "./telegram"
 import { startWorker, stopWorker } from "./worker"
 import { runMigrations } from "./migrations"
 import { checkForUpdate, type UpdateInfo } from "./update-service"
+import { configureClockifyDiagnostics } from "./clockify"
 
 loadEnv({ path: join(process.cwd(), ".env") })
 
@@ -67,7 +72,7 @@ function serializeWorkday(workday: FullWorkday | null): WorkdayData | null {
       type: session.type as "work" | "break",
       startedAt: session.startedAt.toISOString(),
       endedAt: iso(session.endedAt),
-      tasks: session.tasks.map((task) => ({ id: task.id, content: task.content })),
+      tasks: session.tasks.map((task) => ({ id: task.id, content: task.content, workspaceId: task.workspaceId, workspaceName: task.workspaceName, projectId: task.projectId, projectName: task.projectName, startedAt: iso(task.startedAt), endedAt: iso(task.endedAt) })),
     })),
     messages: workday.telegramMessages.map((message) => ({
       id: message.id,
@@ -76,6 +81,7 @@ function serializeWorkday(workday: FullWorkday | null): WorkdayData | null {
       content: message.content,
       errorMessage: message.errorMessage,
     })),
+    clockifySyncEntries: workday.clockifySyncEntries.map((entry) => ({ id: entry.id, description: entry.description, workspaceId: entry.workspaceId, projectId: entry.projectId, startedAt: entry.startedAt.toISOString(), endedAt: entry.endedAt.toISOString(), status: entry.status as "pending" | "synced" | "failed", errorMessage: entry.errorMessage })),
   }
 }
 
@@ -84,6 +90,9 @@ function serializeSettings(settings: StoredSettings): SettingsData {
     defaultStartTime: settings.defaultStartTime,
     telegramChatId: settings.telegramChatId,
     hasTelegramBotToken: Boolean(settings.telegramBotToken),
+    hasClockifyApiKey: Boolean(settings.clockifyApiKey),
+    lastClockifyWorkspaceId: settings.lastClockifyWorkspaceId,
+    lastClockifyProjectId: settings.lastClockifyProjectId,
     timezone: settings.timezone,
     minimizeOnClose: settings.minimizeOnClose,
     desktopNotifications: settings.desktopNotifications,
@@ -103,6 +112,7 @@ function serializeHistory(workday: FullWorkday): HistoryDay {
     actualStartAt: data.actualStartAt,
     sessions: data.sessions,
     messages: data.messages.map(({ id, type, status, errorMessage }) => ({ id, type, status, errorMessage })),
+    clockifySyncEntries: data.clockifySyncEntries,
   }
 }
 
@@ -114,6 +124,9 @@ async function dashboardData(): Promise<DashboardData> {
       defaultStartTime: settings.defaultStartTime,
       timezone: settings.timezone,
       desktopNotifications: settings.desktopNotifications,
+      hasClockifyApiKey: Boolean(settings.clockifyApiKey),
+      lastClockifyWorkspaceId: settings.lastClockifyWorkspaceId,
+      lastClockifyProjectId: settings.lastClockifyProjectId,
     },
     defaultDate: localDateInputValue(),
     defaultTime: localTimeInputValue(),
@@ -232,7 +245,7 @@ function registerIpc() {
     try { const result = await resumeWorkday(); await deliverTelegramMessage(result.messageId); await notifyIfEnabled("Arbeit fortgesetzt", "Die Arbeitszeit läuft weiter."); emitChanged(); return success(result.messageId) } catch (error) { return failure(error) }
   })
   ipcMain.handle("workday:finish", async () => {
-    try { const result = await finishWorkday(); await deliverTelegramMessage(result.messageId); await notifyIfEnabled("Arbeitstag beendet", "Deine Zeiten und Aufgaben sind gespeichert."); emitChanged(); return success(result.messageId) } catch (error) { return failure(error) }
+    try { const result = await finishWorkday(); await deliverTelegramMessage(result.messageId); await syncClockifyWorkday(result.workdayId); await notifyIfEnabled("Arbeitstag beendet", "Deine Zeiten und Aufgaben sind gespeichert."); emitChanged(); return success(result.messageId) } catch (error) { return failure(error) }
   })
   ipcMain.handle("task:create", async (_event, input) => {
     try { await createTask(taskInput.parse(input)); emitChanged(); return success() } catch (error) { return failure(error) }
@@ -250,6 +263,15 @@ function registerIpc() {
       emitChanged()
       return success()
     } catch (error) { return failure(error) }
+  })
+  ipcMain.handle("clockify:workspaces", async () => {
+    try { return { ok: true as const, items: await getClockifyWorkspaces() } } catch (error) { return { ok: false as const, error: errorMessage(error), items: [] } }
+  })
+  ipcMain.handle("clockify:projects", async (_event, input) => {
+    try { const { workspaceId } = workspaceIdInput.parse(input); return { ok: true as const, items: await getClockifyProjects(workspaceId) } } catch (error) { return { ok: false as const, error: errorMessage(error), items: [] } }
+  })
+  ipcMain.handle("clockify:retry", async (_event, input) => {
+    try { const { syncEntryId } = clockifySyncIdInput.parse(input); await syncClockifyEntry(syncEntryId); emitChanged(); return success() } catch (error) { return failure(error) }
   })
   ipcMain.handle("telegram:retry", async (_event, input) => {
     try { const parsed = messageIdInput.parse(input); await retryTelegramMessage(parsed.messageId); emitChanged(); return success(parsed.messageId) } catch (error) { return failure(error) }
@@ -278,6 +300,7 @@ if (process.env.ADHDWORKER_DATA_DIR) {
 }
 
 app.whenReady().then(async () => {
+  configureClockifyDiagnostics(join(app.getPath("logs"), "ADHDWorker"))
   const path = databasePath()
   await runMigrations(path)
   configureDatabase(path)
