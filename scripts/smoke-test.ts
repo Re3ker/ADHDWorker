@@ -1,6 +1,8 @@
+import { rm } from "node:fs/promises"
 import { resolve } from "node:path"
 
 import { configureDatabase, getDb } from "../src/main/db"
+import { runMigrations } from "../src/main/migrations"
 import { createClockifyExport } from "../src/shared/clockify-export"
 import { localDateInputValue, localTimeInputValue } from "../src/shared/time"
 import {
@@ -14,7 +16,10 @@ import {
   startScheduledWorkday,
 } from "../src/main/workday-service"
 
-configureDatabase(resolve("prisma/dev.db"))
+const databasePath = resolve(process.env.ADHDWORKER_SMOKE_DB || "prisma/dev.db")
+const isTemporaryDatabase = Boolean(process.env.ADHDWORKER_SMOKE_DB)
+await runMigrations(databasePath)
+configureDatabase(databasePath)
 const db = getDb()
 
 let workdayId = ""
@@ -66,4 +71,5 @@ try {
   if (workdayId) await db.workday.delete({ where: { id: workdayId } })
   if (plannedWorkdayId) await db.workday.delete({ where: { id: plannedWorkdayId } })
   await db.$disconnect()
+  if (isTemporaryDatabase) await rm(databasePath, { force: true })
 }

@@ -1,20 +1,12 @@
 import { PrismaClient } from "@prisma/client"
-import { app } from "electron"
 import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-
-function migrationDirectory() {
-  return app.isPackaged
-    ? join(process.resourcesPath, "migrations")
-    : join(app.getAppPath(), "prisma", "migrations")
-}
 
 function migrationStatements(sql: string) {
   return sql.split(/;\s*(?:\r?\n|$)/).map((statement) => statement.trim()).filter(Boolean)
 }
 
-export async function runMigrations(databasePath: string) {
-  const directory = migrationDirectory()
+export async function runMigrations(databasePath: string, directory = join(process.cwd(), "prisma", "migrations")) {
   if (!existsSync(directory)) throw new Error("SQLite-Migrationen fehlen in der App-Installation.")
   const client = new PrismaClient({ datasources: { db: { url: `file:${databasePath.replaceAll("\\", "/")}` } } })
   try {

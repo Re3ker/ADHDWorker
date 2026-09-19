@@ -302,7 +302,7 @@ if (process.env.ADHDWORKER_DATA_DIR) {
 app.whenReady().then(async () => {
   configureClockifyDiagnostics(join(app.getPath("logs"), "ADHDWorker"))
   const path = databasePath()
-  await runMigrations(path)
+  await runMigrations(path, app.isPackaged ? join(process.resourcesPath, "migrations") : join(app.getAppPath(), "prisma", "migrations"))
   configureDatabase(path)
   const settings = await getSettings()
   minimizeOnClose = settings.minimizeOnClose
