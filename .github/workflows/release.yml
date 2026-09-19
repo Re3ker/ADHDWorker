@@ -17,6 +17,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci --legacy-peer-deps
+      - run: npm run db:generate
       - run: node -e "const pkg = require('./package.json'); if ('v' + pkg.version !== process.env.GITHUB_REF_NAME) throw new Error('Git-Tag und package.json-Version müssen übereinstimmen.')"
       - run: npm run lint
       - run: npm run typecheck
