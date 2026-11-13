@@ -1,7 +1,7 @@
 {
   "name": "adhdworker",
   "version": "0.1.2",
-  "description": "Lokale Desktop-App für Arbeitszeit, Fokus und Aufgaben.",
+  "description": "Lokale Desktop-App, die an An- und Abmeldung, Pause und Feierabend erinnert.",
   "author": "ADHDWorker",
   "type": "module",
   "private": true,
@@ -18,7 +18,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev --name init_adhdworker",
     "db:deploy": "prisma migrate deploy",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "icons": "tsx scripts/build-icons.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
@@ -37,6 +38,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@resvg/resvg-js": "^2.6.2",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
@@ -58,13 +60,56 @@
   "build": {
     "appId": "com.adhdworker.app",
     "productName": "ADHDWorker",
-    "directories": { "output": "release" },
-    "files": ["out/**/*", "package.json", "public/**/*", { "from": "node_modules/.prisma", "to": "node_modules/.prisma", "filter": ["**/*"] }, "!**/*.map"],
-    "extraResources": [{ "from": "prisma/migrations", "to": "migrations" }, { "from": "public/app-icon.png", "to": "app-icon.png" }],
-    "asarUnpack": ["**/node_modules/.prisma/**", "**/node_modules/@prisma/client/**"],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json",
+      "public/**/*",
+      {
+        "from": "node_modules/.prisma",
+        "to": "node_modules/.prisma",
+        "filter": [
+          "**/*"
+        ]
+      },
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "prisma/migrations",
+        "to": "migrations"
+      },
+      {
+        "from": "public/app-icon.png",
+        "to": "app-icon.png"
+      },
+      {
+        "from": "public/tray-icon.png",
+        "to": "tray-icon.png"
+      }
+    ],
+    "asarUnpack": [
+      "**/node_modules/.prisma/**",
+      "**/node_modules/@prisma/client/**"
+    ],
     "win": {
-      "icon": "public/app-icon.ico",
-      "target": [{ "target": "nsis", "arch": ["x64"] }, { "target": "portable", "arch": ["x64"] }]
+      "icon": "resources/icon/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
     },
     "nsis": {
       "artifactName": "${productName}-${version}-Setup.${ext}",

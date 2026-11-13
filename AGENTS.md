@@ -5,10 +5,10 @@ lokalen HTTP-Server und keine Next.js-Laufzeit.
 
 ## Struktur
 
-- `src/main/`: Electron-Lifecycle, Tray, Prisma/SQLite, Telegram, Worker und IPC-Handler
+- `src/main/`: Electron-Lifecycle (`main.ts`), Fenster/Tray (`window.ts`), IPC (`ipc-handlers.ts`), Prisma/SQLite, Telegram, Erinnerungen (`reminders.ts`) und Worker
 - `src/preload/`: einzige typisierte und validierte Brücke zum Renderer
 - `src/renderer/`: React-Oberfläche, Styles und lokale UI-Zustände
-- `src/shared/`: Typen, Zeit-, Clockify-, Nachrichten- und Validierungslogik
+- `src/shared/`: Typen, Zod-Schemas, Zeit, Tagesplan (`day-plan.ts`), Tagesabschluss (`day-export.ts`) und Nachrichten
 - `prisma/`: SQLite-Schema und Migrationen
 
 ## Architekturregeln
@@ -18,8 +18,11 @@ lokalen HTTP-Server und keine Next.js-Laufzeit.
 - Eingaben werden im Preload und im Main-Prozess mit Zod validiert.
 - Zeiten werden in UTC gespeichert und in `Europe/Berlin` angezeigt/exportiert.
 - SQLite liegt im Electron-`userData`-Verzeichnis. MariaDB-Daten werden nicht importiert.
-- Der Worker läuft im Main-Prozess alle zehn Sekunden; Browser-Timer sind keine
-  Quelle für geplante Starts oder Nachrichten.
+- Der Worker läuft im Main-Prozess alle zehn Sekunden (plus exakter Timer auf die
+  nächste vorgemerkte Aktion); Browser-Timer sind keine Quelle für geplante
+  Aktionen, Erinnerungen oder Nachrichten.
+- Es gibt keine Clockify-Anbindung. Der Tagesabschluss zeigt pro Arbeitsabschnitt
+  kopierbare Felder (Aufgaben, Start `0845`, Ende).
 - Telegram-Token werden nie an den Renderer übergeben.
 - Fehler werden als verständliche nächste Aktion angezeigt; Aufgaben bleiben
   direkt und automatisch speicherbar.
@@ -31,9 +34,18 @@ kein Arbeitstag → planned → working ↔ paused → finished
 planned → cancelled
 ```
 
-Nur offene Work-Sessions nehmen Aufgaben an. Break-Sessions werden nicht in den
-Clockify-Export aufgenommen. Es gibt maximal einen offenen Arbeitstag und eine
-aktive Session.
+Die vier Schritte sind An-/Abmeldungen per Telegram: Anmelden (start), zur Pause
+abmelden (pause), wieder anmelden (resume), Feierabend (end). Eine Erinnerung
+erscheint `leadMinutes` vor der Ziel-Uhrzeit (Anmelden nur Mo–Fr). Bestätigt man
+vor der Uhrzeit, wird die Aktion als `pendingAction` am Workday vorgemerkt und
+genau zur Uhrzeit ausgeführt; danach sofort mit Zeitstempel „jetzt“.
+
+Start- und Pausenzeit sind pro Tag flexibel. Der Feierabend wird in
+`computeDayPlan` aus Start + Soll-Minuten + Pausenzeit berechnet.
+
+Aufgaben landen in der letzten Work-Session (auch während der Pause).
+Break-Sessions zählen nicht zur Arbeitszeit. Es gibt maximal einen offenen
+Arbeitstag und eine aktive Session.
 
 ## Entwicklung
 
@@ -44,11 +56,13 @@ npm run lint
 npm run typecheck
 npm run build
 npm run smoke
+npm run icons
 ```
 
 `dev`, `build` und `start` verwenden Electron-Vite. Die App startet direkt als
-Desktop-Fenster. `npm run smoke` testet den Workday-Ablauf gegen die lokale
-SQLite-Testdatenbank.
+Desktop-Fenster. `npm run smoke` spielt einen ganzen Tag (vorgemerkte
+Aktionen, flexible Pause, Feierabend nach Soll-Stunden, Erinnerungen) gegen
+SQLite durch. `npm run icons` erzeugt die Icons aus `resources/icon/*.svg`.
 
 ## Skills
 

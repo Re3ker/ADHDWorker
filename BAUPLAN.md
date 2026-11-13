@@ -16,19 +16,19 @@ prisma/        SQLite-Schema und Migrationen
 
 Die Datenbank wird beim Electron-Start unter `app.getPath("userData")` angelegt,
 per `prisma migrate deploy` migriert und danach als zentrale Quelle verwendet.
-Der Worker prüft alle zehn Sekunden geplante Arbeitstage und fällige Telegram-
-Nachrichten. Telegram und Clockify sind nur Integrationen/Ausgabeformate.
+Der Worker prüft alle zehn Sekunden vorgemerkte An-/Abmeldungen, fällige
+Telegram-Nachrichten und Erinnerungen. Telegram ist die einzige Integration.
 
 ## Fachlicher Ablauf
 
 ```text
-planen → planned → working → paused → working → finished
-                     └──────────────────────────────┘
+Erinnerung → bestätigen → (vorgemerkt) → zur Uhrzeit ausführen + Telegram
+anmelden → working → pause → paused → wieder anmelden → working → feierabend → finished
 planned → cancelled
 ```
 
-Aufgaben gehören zur offenen Work-Session. Break-Sessions werden nicht in den
-Clockify-Export aufgenommen. Telegram-Fehler bleiben im Protokoll und können
+Aufgaben gehören zur offenen Work-Session. Break-Sessions zählen nicht als Arbeitszeit
+und erscheinen nicht im Tagesabschluss. Telegram-Fehler bleiben im Protokoll und können
 erneut gesendet werden.
 
 ## Abnahme

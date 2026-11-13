@@ -11,7 +11,8 @@ export function configureDatabase(databasePath: string) {
 }
 
 export function getDb() {
-  if (!client) throw new Error("Die lokale Datenbank wurde noch nicht initialisiert.")
+  if (!client)
+    throw new Error("Die lokale Datenbank wurde noch nicht initialisiert.")
   return client
 }
 

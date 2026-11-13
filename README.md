@@ -1,8 +1,10 @@
 # ADHDWorker
 
-Lokale Electron-App zur Dokumentation von Arbeitszeit, Arbeitsphasen und
-erledigten Aufgaben. SQLite ist die zentrale Datenquelle; Telegram ist eine
-optionale Ausgabe und Clockify ein kopierbarer Export.
+Lokale Electron-App, die zuverlässig an die vier täglichen Meldungen erinnert:
+Anmelden, zur Pause abmelden, wieder anmelden und Feierabend. Jede Meldung geht
+per Knopfdruck pünktlich an Telegram. Start und Pause sind flexibel, der
+Feierabend ergibt sich aus den eingestellten Soll-Stunden. Am Ende des Tages
+stehen Aufgaben, Start- und Endzeit pro Abschnitt zum Kopieren bereit.
 
 ## Voraussetzungen
 
@@ -68,7 +70,6 @@ im Main-Prozess und wird nie an den React-Renderer übergeben.
 DATABASE_URL="file:./dev.db"
 TELEGRAM_BOT_TOKEN=""
 TELEGRAM_CHAT_ID=""
-APP_TIMEZONE="Europe/Berlin"
 ```
 
 ## Prüfen
@@ -80,8 +81,11 @@ npm run build
 npm run smoke
 ```
 
-Der Smoke-Test prüft Planung, geplanten Start, Aufgaben, Pause, Fortsetzen,
-Beenden und Clockify-Export gegen SQLite.
+Der Smoke-Test spielt einen ganzen Tag gegen SQLite durch: vorgemerkte
+Anmeldung, flexible Pause, verspätete Rückkehr, Feierabend nach Soll-Stunden,
+Tagesabschluss-Blöcke und Erinnerungslogik.
+
+Das App-Icon wird mit `npm run icons` aus `resources/icon/*.svg` erzeugt.
 
 ## Architektur
 
@@ -89,6 +93,6 @@ Beenden und Clockify-Export gegen SQLite.
 src/main/      Electron, Tray, Prisma, Telegram, Worker, IPC
 src/preload/   typisierte und validierte window.adhdworker-Brücke
 src/renderer/  React-Oberfläche und lokale UI-Zustände
-src/shared/    Zeit, Validierung, Nachrichten, Clockify und Typen
+src/shared/    Zeit, Schemas, Tagesplan, Tagesabschluss, Nachrichten, Typen
 prisma/        Schema und SQLite-Migrationen
 ```

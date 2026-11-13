@@ -1,17 +1,89 @@
-import { useState } from "react"
-import { Clipboard, MessageCircle, RotateCcw } from "lucide-react"
+import { Clipboard, MessageCircle } from "lucide-react"
 
+import { netWorkMinutes } from "../../../shared/day-export"
+import {
+  formatDateLong,
+  formatDuration,
+  formatTime,
+} from "../../../shared/time"
+import type { WorkdayData } from "../../../shared/types"
+import { ACTIONS } from "../../lib/actions"
 import { Button } from "../ui/button"
-import { createClockifyExport, createClockifyLines, getNetMinutes } from "../../../shared/clockify-export"
-import { formatDateLong, formatDurationMinutes, formatTime } from "../../../shared/time"
-import type { HistoryDay } from "../../../shared/types"
 
-export function HistoryView({ days }: { days: HistoryDay[] }) {
-  const [copied, setCopied] = useState<string | null>(null)
-  const [retrying, setRetrying] = useState<string | null>(null)
-  function copy(id: string, text: string) { navigator.clipboard.writeText(text).then(() => { setCopied(id); window.setTimeout(() => setCopied(null), 1800) }) }
-  async function retry(id: string) { setRetrying(id); await window.adhdworker.retryTelegram(id); window.location.reload() }
-  async function retryClockify(id: string) { setRetrying(id); await window.adhdworker.retryClockify(id); window.location.reload() }
-  if (days.length === 0) return <section className="rounded-3xl border border-dashed border-border bg-card p-10 text-center"><p className="text-lg font-semibold">Noch kein Verlauf</p><p className="mt-2 text-sm text-muted-foreground">Nach deinem ersten abgeschlossenen Arbeitstag erscheint er hier.</p><Button className="mt-6" onClick={() => window.location.reload()}>Zum Dashboard</Button></section>
-  return <div className="space-y-5">{days.map((day) => { const lines = createClockifyLines(day.sessions.filter((session) => session.endedAt)); const text = createClockifyExport(day.sessions.filter((session) => session.endedAt)); const taskCount = day.sessions.reduce((sum, session) => sum + session.tasks.length, 0); const failedClockify = day.clockifySyncEntries.filter((entry) => entry.status !== "synced"); return <article key={day.id} className="rounded-3xl border border-border bg-card p-6 shadow-sm sm:p-7"><div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div><p className="text-sm font-medium text-primary">Arbeitstag</p><h2 className="mt-1 text-xl font-semibold">{formatDateLong(day.endedAt)}</h2><p className="mt-2 text-sm text-muted-foreground">{formatTime(day.actualStartAt)} – {formatTime(day.endedAt)} · {formatDurationMinutes(getNetMinutes(day.sessions.filter((session) => session.endedAt)))} netto · {taskCount} Aufgabe{taskCount === 1 ? "" : "n"}</p></div><Button variant="outline" onClick={() => copy(day.id, text)} disabled={!text}><Clipboard /> {copied === day.id ? "Kopiert" : "Export kopieren"}</Button></div>{day.clockifySyncEntries.length ? <div className="mt-4 space-y-2 text-sm text-muted-foreground"><p>Clockify: {day.clockifySyncEntries.length - failedClockify.length} synchronisiert, {failedClockify.length} offen.</p>{failedClockify.map((entry) => <div key={entry.id} className="flex items-center justify-between gap-2 rounded-xl bg-muted p-2"><span>{entry.errorMessage || entry.description}</span><Button size="sm" variant="outline" onClick={() => retryClockify(entry.id)} disabled={retrying === entry.id}><RotateCcw /> Erneut senden</Button></div>)}</div> : null}<details className="mt-6 rounded-2xl bg-muted p-4"><summary className="cursor-pointer text-sm font-medium">Clockify-Zeilen anzeigen</summary><div className="mt-4 space-y-2">{lines.map((line) => <div key={line.sessionId} className="flex items-start gap-3 rounded-xl bg-card p-3"><code className="min-w-0 flex-1 break-words text-xs leading-relaxed">{line.text}</code><Button size="icon-sm" variant="ghost" aria-label="Zeile kopieren" onClick={() => copy(`${day.id}-${line.sessionId}`, line.text)}><Clipboard /></Button></div>)}</div></details><details className="mt-3 rounded-2xl bg-muted p-4"><summary className="cursor-pointer text-sm font-medium">Telegram-Protokoll</summary><div className="mt-4 space-y-2">{day.messages.map((message) => <div key={message.id} className="flex items-center justify-between gap-3 rounded-xl bg-card p-3 text-sm"><span className="flex items-center gap-2"><MessageCircle size={15} className="text-muted-foreground" />{message.type} · {message.status}{message.errorMessage ? ` · ${message.errorMessage}` : ""}</span>{message.status === "failed" ? <Button size="sm" variant="outline" onClick={() => retry(message.id)} disabled={retrying === message.id}><RotateCcw /> Erneut senden</Button> : null}</div>)}</div></details></article> })}</div>
+const MESSAGE_STATUS = {
+  pending: "wartet",
+  sent: "gesendet",
+  failed: "fehlgeschlagen",
+  cancelled: "abgebrochen",
+} as const
+
+export function HistoryView({
+  days,
+  onSummary,
+}: {
+  days: WorkdayData[]
+  onSummary: (workday: WorkdayData) => void
+}) {
+  if (days.length === 0) {
+    return (
+      <section className="rounded-3xl border border-dashed border-border bg-card p-10 text-center">
+        <p className="text-lg font-semibold">Noch kein Verlauf</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Nach deinem ersten Feierabend erscheint der Tag hier.
+        </p>
+      </section>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {days.map((day) => {
+        const taskCount = day.sessions.reduce(
+          (sum, session) => sum + session.tasks.length,
+          0
+        )
+        return (
+          <article
+            key={day.id}
+            className="rounded-3xl border border-border bg-card p-6 shadow-sm"
+          >
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-xl font-semibold">
+                  {formatDateLong(day.endedAt)}
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {formatTime(day.actualStartAt)} – {formatTime(day.endedAt)} ·{" "}
+                  {formatDuration(netWorkMinutes(day.sessions))} netto ·{" "}
+                  {taskCount} Aufgabe
+                  {taskCount === 1 ? "" : "n"}
+                </p>
+              </div>
+              <Button variant="outline" onClick={() => onSummary(day)}>
+                <Clipboard /> Zeiten kopieren
+              </Button>
+            </div>
+            {day.messages.length > 0 ? (
+              <details className="mt-4 rounded-2xl bg-muted p-4">
+                <summary className="cursor-pointer text-sm font-medium">
+                  Telegram-Meldungen
+                </summary>
+                <ul className="mt-3 space-y-2 text-sm">
+                  {day.messages.map((message) => (
+                    <li key={message.id} className="flex items-center gap-2">
+                      <MessageCircle className="size-4 text-muted-foreground" />
+                      {ACTIONS[message.type]?.step ?? message.type} ·{" "}
+                      {formatTime(message.sentAt)} ·{" "}
+                      {MESSAGE_STATUS[message.status]}
+                      {message.errorMessage ? ` · ${message.errorMessage}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+          </article>
+        )
+      })}
+    </div>
+  )
 }

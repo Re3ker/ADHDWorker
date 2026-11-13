@@ -9,13 +9,18 @@ datasource db {
 
 model Settings {
   id                    Int      @id @default(1)
-  timezone              String   @default("Europe/Berlin")
-  defaultStartTime      String   @default("08:45")
+  startTime             String   @default("08:45")
+  pauseTime             String   @default("12:00")
+  pauseMinutes          Int      @default(30)
+  targetWorkMinutes     Int      @default(480)
+  leadMinutes           Int      @default(1)
+  launchAtLogin         Boolean  @default(false)
+  sendStartImmediately  Boolean  @default(true)
+  sendPauseImmediately  Boolean  @default(false)
+  sendResumeImmediately Boolean  @default(false)
+  sendEndImmediately    Boolean  @default(false)
   telegramChatId        String   @default("")
   telegramBotToken      String   @default("")
-  clockifyApiKey        String   @default("")
-  lastClockifyWorkspaceId String?
-  lastClockifyProjectId String?
   minimizeOnClose       Boolean  @default(true)
   desktopNotifications  Boolean  @default(false)
   startMessageTemplate  String
@@ -27,32 +32,36 @@ model Settings {
 }
 
 model Workday {
-  id                String        @id @default(cuid())
-  status            String        @default("planned")
-  scheduledStartAt  DateTime?
-  actualStartAt     DateTime?
-  endedAt           DateTime?
-  activeKey         String?       @unique
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
-  sessions          WorkSession[]
-  telegramMessages  TelegramMessage[]
-  clockifySyncEntries ClockifySyncEntry[]
+  id               String            @id @default(cuid())
+  status           String            @default("planned")
+  scheduledStartAt DateTime?
+  actualStartAt    DateTime?
+  endedAt          DateTime?
+  activeKey        String?           @unique
+  plannedPauseAt   DateTime?
+  pauseMinutes     Int?
+  pendingAction    String?
+  pendingActionAt  DateTime?
+  pendingMessage   String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  sessions         WorkSession[]
+  telegramMessages TelegramMessage[]
 
   @@index([status, scheduledStartAt])
   @@index([createdAt])
 }
 
 model WorkSession {
-  id        String      @id @default(cuid())
+  id        String    @id @default(cuid())
   workdayId String
   type      String
   startedAt DateTime
   endedAt   DateTime?
-  activeKey String?     @unique
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
-  workday   Workday     @relation(fields: [workdayId], references: [id], onDelete: Cascade)
+  activeKey String?   @unique
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  workday   Workday   @relation(fields: [workdayId], references: [id], onDelete: Cascade)
   tasks     Task[]
 
   @@index([workdayId, type, startedAt])
@@ -62,12 +71,6 @@ model Task {
   id            String      @id @default(cuid())
   workSessionId String
   content       String
-  workspaceId   String?
-  workspaceName String?
-  projectId     String?
-  projectName   String?
-  startedAt     DateTime?
-  endedAt       DateTime?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   workSession   WorkSession @relation(fields: [workSessionId], references: [id], onDelete: Cascade)
@@ -75,40 +78,19 @@ model Task {
   @@index([workSessionId, createdAt])
 }
 
-model ClockifySyncEntry {
-  id              String      @id @default(cuid())
-  workdayId       String
-  workSessionId   String
-  workspaceId     String
-  projectId       String
-  description     String
-  startedAt       DateTime
-  endedAt         DateTime
-  status          String      @default("pending")
-  clockifyEntryId String?
-  errorMessage    String?
-  attemptedAt     DateTime?
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-  workday         Workday     @relation(fields: [workdayId], references: [id], onDelete: Cascade)
-
-  @@index([workdayId, status])
-  @@index([status])
-}
-
 model TelegramMessage {
-  id            String                 @id @default(cuid())
-  workdayId     String
-  type          String
-  content       String
-  scheduledFor  DateTime
-  sentAt        DateTime?
-  status        String                 @default("pending")
-  errorMessage  String?
-  lockedAt      DateTime?
-  createdAt     DateTime               @default(now())
-  updatedAt     DateTime               @updatedAt
-  workday       Workday                @relation(fields: [workdayId], references: [id], onDelete: Cascade)
+  id           String    @id @default(cuid())
+  workdayId    String
+  type         String
+  content      String
+  scheduledFor DateTime
+  sentAt       DateTime?
+  status       String    @default("pending")
+  errorMessage String?
+  lockedAt     DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  workday      Workday   @relation(fields: [workdayId], references: [id], onDelete: Cascade)
 
   @@index([status, scheduledFor])
   @@index([workdayId, type])

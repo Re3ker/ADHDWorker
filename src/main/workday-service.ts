@@ -1,332 +1,404 @@
-import type { Prisma, PrismaClient } from "@prisma/client"
+import type { Prisma } from "@prisma/client"
 
 import { getDb } from "./db"
-import { zonedLocalDateTime, formatDate, formatTime } from "../shared/time"
-import { DEFAULT_TEMPLATES, renderMessageTemplate, tasksForMessage } from "../shared/message-templates"
-import { settingsSchema, startWorkdaySchema, taskSchema, updateTaskSchema } from "../shared/validations"
-import { createClockifyTimeEntry, listClockifyProjects, listClockifyWorkspaces } from "./clockify"
+import { getSettings } from "./settings-service"
+import {
+  renderMessageTemplate,
+  tasksForMessage,
+} from "../shared/message-templates"
+import {
+  requestActionSchema,
+  taskSchema,
+  todayPauseSchema,
+  updateTaskSchema,
+  type ActionType,
+  type PreviewInput,
+} from "../shared/schemas"
+import { formatDate, formatTime, startOfToday, todayAt } from "../shared/time"
+import type { WorkdayData } from "../shared/types"
 
 const ACTIVE_WORKDAY_KEY = "current-workday"
 const ACTIVE_SESSION_KEY = "current-session"
 
-type TelegramMessageType = "start" | "pause" | "resume" | "end"
-type WorkdayStatus = "planned" | "working" | "paused" | "finished" | "cancelled"
+const workdayInclude = {
+  sessions: {
+    orderBy: { startedAt: "asc" },
+    include: { tasks: { orderBy: { createdAt: "asc" } } },
+  },
+  telegramMessages: { orderBy: { createdAt: "asc" } },
+} satisfies Prisma.WorkdayInclude
 
-export type ActionResult = { ok: true; message?: string } | { ok: false; error: string }
+export type FullWorkday = Prisma.WorkdayGetPayload<{
+  include: typeof workdayInclude
+}>
+type Tx = Prisma.TransactionClient
 
-function fail(error: unknown): never {
-  throw new Error(error instanceof Error ? error.message : String(error))
+/** Ergebnis einer ausgeführten An-/Abmeldung. */
+export type ExecutedAction = {
+  type: ActionType
+  workdayId: string
+  messageId: string | null
 }
 
-async function ensureSettings(client: Prisma.TransactionClient | PrismaClient = getDb()) {
-  const existing = await client.settings.findUnique({ where: { id: 1 } })
-  if (existing) {
-    const bootstrap = {
-      ...(existing.telegramBotToken ? {} : process.env.TELEGRAM_BOT_TOKEN?.trim() ? { telegramBotToken: process.env.TELEGRAM_BOT_TOKEN.trim() } : {}),
-      ...(existing.telegramChatId ? {} : process.env.TELEGRAM_CHAT_ID?.trim() ? { telegramChatId: process.env.TELEGRAM_CHAT_ID.trim() } : {}),
-    }
-    return Object.keys(bootstrap).length > 0 ? client.settings.update({ where: { id: 1 }, data: bootstrap }) : existing
-  }
-  try {
-    return await client.settings.create({
-      data: {
-        id: 1,
-        timezone: process.env.APP_TIMEZONE || "Europe/Berlin",
-        defaultStartTime: "08:45",
-        telegramChatId: process.env.TELEGRAM_CHAT_ID?.trim() || "",
-        telegramBotToken: process.env.TELEGRAM_BOT_TOKEN?.trim() || "",
-        minimizeOnClose: true,
-        desktopNotifications: false,
-        startMessageTemplate: DEFAULT_TEMPLATES.start,
-        pauseMessageTemplate: DEFAULT_TEMPLATES.pause,
-        resumeMessageTemplate: DEFAULT_TEMPLATES.resume,
-        endMessageTemplate: DEFAULT_TEMPLATES.end,
-      },
-    })
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
-      const concurrent = await client.settings.findUnique({ where: { id: 1 } })
-      if (concurrent) return concurrent
-    }
-    throw error
-  }
+const REQUIRED_STATUS: Record<ActionType, string[]> = {
+  start: ["planned"],
+  pause: ["working"],
+  resume: ["paused"],
+  end: ["working"],
 }
 
-export async function getSettings() {
-  return ensureSettings()
+const WRONG_STATUS: Record<ActionType, string> = {
+  start: "Du bist heute bereits angemeldet.",
+  pause: "Zur Pause abmelden geht nur, während du arbeitest.",
+  resume: "Wieder anmelden geht nur während der Pause.",
+  end: "Feierabend geht nur, während du arbeitest. Bist du noch in der Pause?",
 }
 
-export async function getCurrentWorkday() {
-  return getDb().workday.findFirst({
+function fail(message: string): never {
+  throw new Error(message)
+}
+
+// ---------- Lesen ----------
+
+export function getCurrentWorkday(client: Tx = getDb()) {
+  return client.workday.findUnique({
     where: { activeKey: ACTIVE_WORKDAY_KEY },
-    include: {
-      sessions: {
-        orderBy: { startedAt: "asc" },
-        include: { tasks: { orderBy: { createdAt: "asc" } } },
-      },
-      telegramMessages: { orderBy: { createdAt: "asc" } }, clockifySyncEntries: { orderBy: { startedAt: "asc" } },
-    },
+    include: workdayInclude,
   })
 }
 
-export async function getWorkdayById(id: string) {
-  return getDb().workday.findUnique({
-    where: { id },
-    include: {
-      sessions: {
-        orderBy: { startedAt: "asc" },
-        include: { tasks: { orderBy: { createdAt: "asc" } } },
-      },
-      telegramMessages: { orderBy: { createdAt: "asc" } }, clockifySyncEntries: { orderBy: { startedAt: "asc" } },
-    },
-  })
+export function getWorkdayById(id: string) {
+  return getDb().workday.findUnique({ where: { id }, include: workdayInclude })
 }
 
-export async function getFinishedWorkdays() {
+export function getFinishedWorkdays() {
   return getDb().workday.findMany({
     where: { status: "finished" },
     orderBy: { endedAt: "desc" },
-    include: {
-      sessions: {
-        orderBy: { startedAt: "asc" },
-        include: { tasks: { orderBy: { createdAt: "asc" } } },
+    include: workdayInclude,
+    take: 120,
+  })
+}
+
+export function getFinishedToday(now = new Date()) {
+  return getDb().workday.findFirst({
+    where: { status: "finished", endedAt: { gte: startOfToday(now) } },
+    orderBy: { endedAt: "desc" },
+    include: workdayInclude,
+  })
+}
+
+/** Wurde heute schon gearbeitet (angemeldet)? */
+export async function hasStartedToday(now = new Date()) {
+  const count = await getDb().workday.count({
+    where: {
+      status: { in: ["working", "paused", "finished"] },
+      actualStartAt: { gte: startOfToday(now) },
+    },
+  })
+  return count > 0
+}
+
+export function serializeWorkday(workday: FullWorkday): WorkdayData {
+  const iso = (value: Date | null) => value?.toISOString() ?? null
+  return {
+    id: workday.id,
+    status: workday.status as WorkdayData["status"],
+    scheduledStartAt: iso(workday.scheduledStartAt),
+    actualStartAt: iso(workday.actualStartAt),
+    endedAt: iso(workday.endedAt),
+    plannedPauseAt: iso(workday.plannedPauseAt),
+    pauseMinutes: workday.pauseMinutes,
+    pendingAction: workday.pendingAction as ActionType | null,
+    pendingActionAt: iso(workday.pendingActionAt),
+    sessions: workday.sessions.map((session) => ({
+      id: session.id,
+      type: session.type as "work" | "break",
+      startedAt: session.startedAt.toISOString(),
+      endedAt: iso(session.endedAt),
+      tasks: session.tasks.map(({ id, content }) => ({ id, content })),
+    })),
+    messages: workday.telegramMessages.map((message) => ({
+      id: message.id,
+      type: message.type as ActionType,
+      status: message.status as WorkdayData["messages"][number]["status"],
+      content: message.content,
+      errorMessage: message.errorMessage,
+      sentAt: iso(message.sentAt),
+    })),
+  }
+}
+
+// ---------- Nachrichten ----------
+
+async function renderMessage(
+  tx: Tx,
+  type: ActionType,
+  workday: FullWorkday | null,
+  at: Date
+) {
+  const settings = await getSettings(tx)
+  const templates: Record<ActionType, string> = {
+    start: settings.startMessageTemplate,
+    pause: settings.pauseMessageTemplate,
+    resume: settings.resumeMessageTemplate,
+    end: settings.endMessageTemplate,
+  }
+  const sessions = workday?.sessions ?? []
+  const workSessions = sessions.filter((session) => session.type === "work")
+  const lastWork = workSessions.at(-1)
+  // Pause: alle Aufgaben des Tages. Feierabend: Aufgaben seit der Pause.
+  const tasks =
+    type === "pause"
+      ? workSessions.flatMap((session) => session.tasks)
+      : (lastWork?.tasks ?? [])
+  const startedAt =
+    type === "end" ? lastWork?.startedAt : workday?.actualStartAt
+  return renderMessageTemplate(templates[type], {
+    date: formatDate(at),
+    startTime: formatTime(
+      type === "start" || type === "resume" ? at : startedAt
+    ),
+    endTime: formatTime(at),
+    tasks: tasksForMessage(tasks),
+  })
+}
+
+export async function previewMessage(input: PreviewInput, now = new Date()) {
+  const at = input.at ? todayAt(input.at, now) : now
+  return renderMessage(getDb(), input.type, await getCurrentWorkday(), at)
+}
+
+// ---------- Zustandswechsel ----------
+
+/**
+ * Führt eine An-/Abmeldung zum Zeitpunkt `at` aus.
+ * message: null = Vorlage, "" = keine Nachricht, sonst eigener Text.
+ */
+async function executeAction(
+  tx: Tx,
+  type: ActionType,
+  at: Date,
+  message: string | null
+): Promise<ExecutedAction> {
+  let workday = await getCurrentWorkday(tx)
+  if (type === "start" && !workday) {
+    workday = await tx.workday.create({
+      data: { status: "planned", activeKey: ACTIVE_WORKDAY_KEY },
+      include: workdayInclude,
+    })
+  }
+  if (!workday) fail("Du bist heute noch nicht angemeldet.")
+  if (!REQUIRED_STATUS[type].includes(workday.status)) fail(WRONG_STATUS[type])
+
+  const openSession = workday.sessions.find((session) => !session.endedAt)
+  const content =
+    message === null ? await renderMessage(tx, type, workday, at) : message
+
+  if (openSession) {
+    await tx.workSession.update({
+      where: { id: openSession.id },
+      data: { endedAt: at, activeKey: null },
+    })
+  }
+  if (type !== "end") {
+    await tx.workSession.create({
+      data: {
+        workdayId: workday.id,
+        type: type === "pause" ? "break" : "work",
+        startedAt: at,
+        activeKey: ACTIVE_SESSION_KEY,
       },
-      telegramMessages: { orderBy: { createdAt: "asc" } }, clockifySyncEntries: { orderBy: { startedAt: "asc" } },
+    })
+  }
+
+  const clearPending = {
+    pendingAction: null,
+    pendingActionAt: null,
+    pendingMessage: null,
+  }
+  const statusData: Record<ActionType, Prisma.WorkdayUpdateInput> = {
+    start: { status: "working", actualStartAt: at, scheduledStartAt: at },
+    pause: { status: "paused", plannedPauseAt: at },
+    resume: { status: "working" },
+    end: { status: "finished", endedAt: at, activeKey: null },
+  }
+  await tx.workday.update({
+    where: { id: workday.id },
+    data: { ...statusData[type], ...clearPending },
+  })
+
+  let messageId: string | null = null
+  if (content.trim()) {
+    const created = await tx.telegramMessage.create({
+      data: { workdayId: workday.id, type, content, scheduledFor: new Date() },
+    })
+    messageId = created.id
+  }
+  return { type, workdayId: workday.id, messageId }
+}
+
+/**
+ * Vom Dialog bestätigt: liegt die Ziel-Uhrzeit in der Zukunft, wird die Aktion
+ * vorgemerkt und vom Worker pünktlich ausgeführt. Sonst sofort.
+ */
+export async function requestAction(input: unknown, now = new Date()) {
+  const parsed = requestActionSchema.parse(input)
+  const at = parsed.at ? todayAt(parsed.at, now) : now
+  const runNow = at.getTime() <= now.getTime()
+
+  return getDb().$transaction(async (tx) => {
+    let workday = await getCurrentWorkday(tx)
+    if (parsed.type === "pause" && parsed.pauseMinutes && workday) {
+      await tx.workday.update({
+        where: { id: workday.id },
+        data: { pauseMinutes: parsed.pauseMinutes },
+      })
+    }
+    if (runNow) {
+      const executed = await executeAction(tx, parsed.type, now, parsed.message)
+      return { executed, messageId: null }
+    }
+
+    if (parsed.type === "start" && !workday) {
+      workday = await tx.workday.create({
+        data: { status: "planned", activeKey: ACTIVE_WORKDAY_KEY },
+        include: workdayInclude,
+      })
+    }
+    if (!workday) fail("Du bist heute noch nicht angemeldet.")
+    if (!REQUIRED_STATUS[parsed.type].includes(workday.status)) {
+      fail(WRONG_STATUS[parsed.type])
+    }
+    // Nachricht sofort senden, die Zeit zählt trotzdem erst ab `at`.
+    let messageId: string | null = null
+    if (parsed.sendNow && parsed.message !== "") {
+      const content =
+        parsed.message ?? (await renderMessage(tx, parsed.type, workday, at))
+      if (content.trim()) {
+        const created = await tx.telegramMessage.create({
+          data: {
+            workdayId: workday.id,
+            type: parsed.type,
+            content,
+            scheduledFor: now,
+          },
+        })
+        messageId = created.id
+      }
+    }
+    await tx.workday.update({
+      where: { id: workday.id },
+      data: {
+        pendingAction: parsed.type,
+        pendingActionAt: at,
+        pendingMessage: parsed.sendNow ? "" : parsed.message,
+        ...(parsed.type === "start" ? { scheduledStartAt: at } : {}),
+        ...(parsed.type === "pause" ? { plannedPauseAt: at } : {}),
+      },
+    })
+    return { executed: null, messageId }
+  })
+}
+
+/** Vom Worker: fällige vorgemerkte Aktion zur geplanten Uhrzeit ausführen. */
+export async function runDuePendingAction(now = new Date()) {
+  return getDb().$transaction(async (tx) => {
+    const workday = await tx.workday.findUnique({
+      where: { activeKey: ACTIVE_WORKDAY_KEY },
+    })
+    if (!workday?.pendingAction || !workday.pendingActionAt) return null
+    if (workday.pendingActionAt > now) return null
+    return executeAction(
+      tx,
+      workday.pendingAction as ActionType,
+      workday.pendingActionAt,
+      workday.pendingMessage
+    )
+  })
+}
+
+/** Vorgemerkte Aktion nicht abwarten, sondern jetzt ausführen. */
+export async function runPendingNow(now = new Date()) {
+  return getDb().$transaction(async (tx) => {
+    const workday = await getCurrentWorkday(tx)
+    if (!workday?.pendingAction) fail("Es ist nichts vorgemerkt.")
+    return executeAction(
+      tx,
+      workday.pendingAction as ActionType,
+      now,
+      workday.pendingMessage
+    )
+  })
+}
+
+export async function cancelPendingAction() {
+  const workday = await getCurrentWorkday()
+  if (!workday?.pendingAction) return
+  if (workday.pendingAction === "start" && workday.status === "planned") {
+    await getDb().workday.update({
+      where: { id: workday.id },
+      data: { status: "cancelled", activeKey: null, pendingAction: null },
+    })
+    return
+  }
+  await getDb().workday.update({
+    where: { id: workday.id },
+    data: { pendingAction: null, pendingActionAt: null, pendingMessage: null },
+  })
+}
+
+export async function nextPendingActionAt() {
+  const workday = await getDb().workday.findUnique({
+    where: { activeKey: ACTIVE_WORKDAY_KEY },
+    select: { pendingActionAt: true },
+  })
+  return workday?.pendingActionAt ?? null
+}
+
+/** Pausenzeit/-dauer nur für heute ändern. */
+export async function setTodayPause(input: unknown, now = new Date()) {
+  const parsed = todayPauseSchema.parse(input)
+  const workday = await getCurrentWorkday()
+  if (!workday || !["planned", "working"].includes(workday.status)) {
+    fail("Die Pause kannst du anpassen, sobald du angemeldet bist.")
+  }
+  await getDb().workday.update({
+    where: { id: workday.id },
+    data: {
+      plannedPauseAt: todayAt(parsed.at, now),
+      pauseMinutes: parsed.minutes,
     },
   })
 }
 
-export async function createPlannedOrImmediateWorkday(input: { date: string; time: string }) {
-  const parsed = startWorkdaySchema.parse(input)
-  const scheduledStartAt = zonedLocalDateTime(parsed.date, parsed.time)
-  const now = new Date()
-  const startsImmediately = scheduledStartAt <= now
+// ---------- Aufgaben ----------
 
-  return getDb().$transaction(async (tx) => {
-    const active = await tx.workday.findUnique({ where: { activeKey: ACTIVE_WORKDAY_KEY } })
-    if (active) fail("Es gibt bereits einen offenen Arbeitstag.")
-
-    const settings = await ensureSettings(tx)
-    const workday = await tx.workday.create({
-      data: {
-        status: startsImmediately ? "working" : "planned",
-        scheduledStartAt,
-        actualStartAt: startsImmediately ? now : null,
-        activeKey: ACTIVE_WORKDAY_KEY,
-        sessions: startsImmediately
-          ? { create: { type: "work", startedAt: now, activeKey: ACTIVE_SESSION_KEY } }
-          : undefined,
-      },
-    })
-
-    const content = renderMessageTemplate(settings.startMessageTemplate, {
-      date: formatDate(scheduledStartAt),
-      startTime: formatTime(startsImmediately ? now : scheduledStartAt),
-    })
-    const message = await tx.telegramMessage.create({
-      data: {
-        workdayId: workday.id,
-        type: "start",
-        content,
-        scheduledFor: now,
-      },
-    })
-
-    return { workday, message, startsImmediately }
-  })
+export async function createTask(input: unknown) {
+  const { content } = taskSchema.parse(input)
+  const workday = await getCurrentWorkday()
+  // Während der Pause landet die Aufgabe im letzten Arbeitsabschnitt.
+  const session = workday?.sessions
+    .filter((item) => item.type === "work")
+    .at(-1)
+  if (!workday || !session) {
+    fail("Melde dich zuerst an, dann kannst du Aufgaben erfassen.")
+  }
+  return getDb().task.create({ data: { workSessionId: session.id, content } })
 }
 
-export async function startScheduledWorkday(workdayId: string) {
-  return getDb().$transaction(async (tx) => {
-    const workday = await tx.workday.findUnique({ where: { id: workdayId } })
-    const now = new Date()
-    if (!workday || workday.status !== "planned" || !workday.scheduledStartAt || workday.scheduledStartAt > now) return null
-    const startedAt = workday.scheduledStartAt
-    const claimed = await tx.workday.updateMany({
-      where: { id: workday.id, status: "planned", scheduledStartAt: { lte: now } },
-      data: { status: "working", actualStartAt: startedAt },
-    })
-    if (claimed.count === 0) return null
-    await tx.workSession.create({ data: { workdayId: workday.id, type: "work", startedAt, activeKey: ACTIVE_SESSION_KEY } })
-    return tx.workday.findUnique({ where: { id: workday.id }, include: { sessions: true } })
-  })
-}
-
-export async function cancelPlannedWorkday() {
-  return getDb().$transaction(async (tx) => {
-    const workday = await tx.workday.findUnique({ where: { activeKey: ACTIVE_WORKDAY_KEY } })
-    if (!workday || workday.status !== "planned") fail("Nur geplante Arbeitstage können abgebrochen werden.")
-    await tx.telegramMessage.updateMany({
-      where: { workdayId: workday.id, type: "start", status: "pending" },
-      data: { status: "cancelled" },
-    })
-    return tx.workday.update({ where: { id: workday.id }, data: { status: "cancelled", activeKey: null } })
-  })
-}
-
-async function createMessage(
-  tx: Prisma.TransactionClient,
-  data: { workdayId: string; type: TelegramMessageType; content: string; scheduledFor?: Date },
-) {
-  return tx.telegramMessage.create({
-    data: { ...data, scheduledFor: data.scheduledFor ?? new Date() },
-  })
-}
-
-async function closeLastTask(tx: Prisma.TransactionClient, sessionId: string, endedAt: Date) {
-  const task = await tx.task.findFirst({ where: { workSessionId: sessionId }, orderBy: { createdAt: "desc" } })
-  if (task) await tx.task.update({ where: { id: task.id }, data: { endedAt } })
-}
-
-export async function pauseWorkday() {
-  return getDb().$transaction(async (tx) => {
-    const workday = await tx.workday.findUnique({ where: { activeKey: ACTIVE_WORKDAY_KEY } })
-    if (!workday || workday.status !== "working") fail("Pause ist nur während laufender Arbeit möglich.")
-    const session = await tx.workSession.findUnique({ where: { activeKey: ACTIVE_SESSION_KEY }, include: { tasks: true } })
-    if (!session || session.workdayId !== workday.id || session.type !== "work") fail("Keine offene Arbeitssession gefunden.")
-
-    const now = new Date()
-    const settings = await ensureSettings(tx)
-    await closeLastTask(tx, session.id, now)
-    await tx.workSession.update({ where: { id: session.id }, data: { endedAt: now, activeKey: null } })
-    await tx.workday.update({ where: { id: workday.id }, data: { status: "paused" } })
-    const breakSession = await tx.workSession.create({ data: { workdayId: workday.id, type: "break", startedAt: now, activeKey: ACTIVE_SESSION_KEY } })
-    const content = renderMessageTemplate(settings.pauseMessageTemplate, {
-      date: formatDate(now),
-      startTime: formatTime(session.startedAt),
-      endTime: formatTime(now),
-      tasks: tasksForMessage(session.tasks),
-    })
-    const message = await createMessage(tx, { workdayId: workday.id, type: "pause", content })
-    return { workdayId: workday.id, messageId: message.id, breakSessionId: breakSession.id }
-  })
-}
-
-export async function resumeWorkday() {
-  return getDb().$transaction(async (tx) => {
-    const workday = await tx.workday.findUnique({ where: { activeKey: ACTIVE_WORKDAY_KEY } })
-    if (!workday || workday.status !== "paused") fail("Fortsetzen ist nur während einer Pause möglich.")
-    const session = await tx.workSession.findUnique({ where: { activeKey: ACTIVE_SESSION_KEY } })
-    if (!session || session.workdayId !== workday.id || session.type !== "break") fail("Keine offene Pause gefunden.")
-
-    const now = new Date()
-    const settings = await ensureSettings(tx)
-    await closeLastTask(tx, session.id, now)
-    await tx.workSession.update({ where: { id: session.id }, data: { endedAt: now, activeKey: null } })
-    const nextSession = await tx.workSession.create({ data: { workdayId: workday.id, type: "work", startedAt: now, activeKey: ACTIVE_SESSION_KEY } })
-    await tx.workday.update({ where: { id: workday.id }, data: { status: "working" } })
-    const content = renderMessageTemplate(settings.resumeMessageTemplate, {
-      date: formatDate(now),
-      startTime: formatTime(now),
-    })
-    const message = await createMessage(tx, { workdayId: workday.id, type: "resume", content })
-    return { workdayId: workday.id, messageId: message.id, sessionId: nextSession.id }
-  })
-}
-
-export async function finishWorkday() {
-  return getDb().$transaction(async (tx) => {
-    const workday = await tx.workday.findUnique({ where: { activeKey: ACTIVE_WORKDAY_KEY } })
-    if (!workday || workday.status !== "working") fail("Arbeit kann nur während laufender Arbeit beendet werden.")
-    const session = await tx.workSession.findUnique({ where: { activeKey: ACTIVE_SESSION_KEY }, include: { tasks: true } })
-    if (!session || session.workdayId !== workday.id || session.type !== "work") fail("Keine offene Arbeitssession gefunden.")
-
-    const now = new Date()
-    const settings = await ensureSettings(tx)
-    await tx.workSession.update({ where: { id: session.id }, data: { endedAt: now, activeKey: null } })
-    await tx.workday.update({ where: { id: workday.id }, data: { status: "finished", endedAt: now, activeKey: null } })
-    const content = renderMessageTemplate(settings.endMessageTemplate, {
-      date: formatDate(now),
-      startTime: formatTime(session.startedAt),
-      endTime: formatTime(now),
-      tasks: tasksForMessage(session.tasks),
-    })
-    const message = await createMessage(tx, { workdayId: workday.id, type: "end", content })
-    const completed = await tx.workday.findUnique({ where: { id: workday.id }, include: { sessions: { where: { type: "work" }, orderBy: { startedAt: "asc" }, include: { tasks: { orderBy: { createdAt: "asc" } } } } } })
-    if (completed) {
-      for (const completedSession of completed.sessions) {
-        let group: { workspaceId: string; projectId: string; description: string[]; startedAt: Date; endedAt: Date } | null = null
-        for (const task of completedSession.tasks) {
-          if (!task.workspaceId || !task.projectId || !task.startedAt || !task.endedAt) { if (group) { await tx.clockifySyncEntry.create({ data: { workdayId: workday.id, workSessionId: completedSession.id, ...group, description: group.description.join(", ") } }); group = null }; continue }
-          if (group && group.workspaceId === task.workspaceId && group.projectId === task.projectId && group.endedAt.getTime() === task.startedAt.getTime()) { group.description.push(task.content); group.endedAt = task.endedAt }
-          else { if (group) await tx.clockifySyncEntry.create({ data: { workdayId: workday.id, workSessionId: completedSession.id, ...group, description: group.description.join(", ") } }); group = { workspaceId: task.workspaceId, projectId: task.projectId, description: [task.content], startedAt: task.startedAt, endedAt: task.endedAt } }
-        }
-        if (group) await tx.clockifySyncEntry.create({ data: { workdayId: workday.id, workSessionId: completedSession.id, ...group, description: group.description.join(", ") } })
-      }
-    }
-    return { workdayId: workday.id, messageId: message.id }
-  })
-}
-
-export async function createTask(input: { workSessionId: string; content: string; workspaceId?: string | null; workspaceName?: string | null; projectId?: string | null; projectName?: string | null }) {
-  const parsed = taskSchema.parse(input)
-  return getDb().$transaction(async (tx) => {
-    const session = await tx.workSession.findUnique({ where: { id: parsed.workSessionId }, include: { workday: true } })
-    if (!session || session.workday.status !== "working" || session.endedAt || session.activeKey !== ACTIVE_SESSION_KEY) {
-      fail("Aufgaben können nur in der offenen Arbeitssession erfasst werden.")
-    }
-    const now = new Date()
-    const previous = await tx.task.findFirst({ where: { workSessionId: session.id }, orderBy: { createdAt: "desc" } })
-    const startedAt = previous?.endedAt ?? session.startedAt
-    const task = await tx.task.create({ data: { ...parsed, workspaceId: parsed.workspaceId ?? null, workspaceName: parsed.workspaceName ?? null, projectId: parsed.projectId ?? null, projectName: parsed.projectName ?? null, startedAt, endedAt: now } })
-    if (task.workspaceId && task.projectId) await tx.settings.update({ where: { id: 1 }, data: { lastClockifyWorkspaceId: task.workspaceId, lastClockifyProjectId: task.projectId } })
-    return task
-  })
-}
-
-export async function updateTask(input: { taskId: string; content: string }) {
-  const parsed = updateTaskSchema.parse(input)
-  const task = await getDb().task.findUnique({ where: { id: parsed.taskId }, include: { workSession: { include: { workday: true } } } })
-  if (!task || ["finished", "cancelled"].includes(task.workSession.workday.status)) fail("Diese Aufgabe kann nicht mehr bearbeitet werden.")
-  return getDb().task.update({ where: { id: parsed.taskId }, data: { content: parsed.content } })
+export async function updateTask(input: unknown) {
+  const { taskId, content } = updateTaskSchema.parse(input)
+  return getDb().task.update({ where: { id: taskId }, data: { content } })
 }
 
 export async function deleteTask(taskId: string) {
-  const task = await getDb().task.findUnique({ where: { id: taskId }, include: { workSession: { include: { workday: true } } } })
-  if (!task || ["finished", "cancelled"].includes(task.workSession.workday.status)) fail("Diese Aufgabe kann nicht mehr gelöscht werden.")
   return getDb().task.delete({ where: { id: taskId } })
 }
 
-export async function getTasksForSession(workSessionId: string) {
-  return getDb().task.findMany({ where: { workSessionId }, orderBy: { createdAt: "asc" } })
-}
+// ---------- Telegram ----------
 
-export async function updateSettings(input: unknown) {
-  const parsed = settingsSchema.parse(input)
-  const { telegramBotToken, clockifyApiKey, ...settings } = parsed
-  await ensureSettings()
-  return getDb().settings.update({
-    where: { id: 1 },
-    data: { ...settings, ...(telegramBotToken ? { telegramBotToken } : {}), ...(clockifyApiKey ? { clockifyApiKey } : {}) },
-  })
-}
-
-export async function getClockifyWorkspaces() { const settings = await ensureSettings(); return listClockifyWorkspaces(settings.clockifyApiKey) }
-export async function getClockifyProjects(workspaceId: string) { const settings = await ensureSettings(); return listClockifyProjects(settings.clockifyApiKey, workspaceId) }
-
-export async function syncClockifyEntry(syncEntryId: string) {
-  const entry = await getDb().clockifySyncEntry.findUnique({ where: { id: syncEntryId } })
-  if (!entry || entry.status === "synced") return
-  try {
-    const settings = await ensureSettings()
-    const response = await createClockifyTimeEntry(settings.clockifyApiKey, entry)
-    await getDb().clockifySyncEntry.update({ where: { id: entry.id }, data: { status: "synced", clockifyEntryId: response.id ?? null, errorMessage: null, attemptedAt: new Date() } })
-  } catch (error) {
-    await getDb().clockifySyncEntry.update({ where: { id: entry.id }, data: { status: "failed", errorMessage: error instanceof Error ? error.message : "Clockify-Sync fehlgeschlagen.", attemptedAt: new Date() } })
-    throw error
-  }
-}
-
-export async function syncClockifyWorkday(workdayId: string) {
-  const entries = await getDb().clockifySyncEntry.findMany({ where: { workdayId, status: { not: "synced" } } })
-  await Promise.all(entries.map(async (entry) => { try { await syncClockifyEntry(entry.id) } catch { /* retained for retry */ } }))
-}
-
-export async function getMessage(id: string) {
-  return getDb().telegramMessage.findUnique({ where: { id }, include: { workday: true } })
-}
-
-export async function getDueMessages() {
+export function getDueMessages() {
   const stale = new Date(Date.now() - 5 * 60 * 1000)
   return getDb().telegramMessage.findMany({
     where: {
@@ -335,20 +407,6 @@ export async function getDueMessages() {
       OR: [{ lockedAt: null }, { lockedAt: { lt: stale } }],
     },
     orderBy: { scheduledFor: "asc" },
-    take: 50,
+    take: 20,
   })
 }
-
-export async function getDuePlannedWorkdays() {
-  return getDb().workday.findMany({
-    where: {
-      status: "planned",
-      scheduledStartAt: { not: null, lte: new Date() },
-    },
-    orderBy: { scheduledStartAt: "asc" },
-    select: { id: true },
-    take: 50,
-  })
-}
-
-export type WorkdayStatusValue = WorkdayStatus
