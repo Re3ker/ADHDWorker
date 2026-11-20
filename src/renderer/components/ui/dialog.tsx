@@ -40,7 +40,7 @@ export function Dialog({
     >
       <div
         className={`max-h-[90vh] w-full overflow-y-auto rounded-3xl border bg-card p-7 shadow-2xl ${
-          wide ? "max-w-3xl" : "max-w-xl"
+          wide ? "max-w-3xl" : "max-w-2xl"
         } ${tone === "alert" ? "border-destructive/60" : "border-border"}`}
       >
         <div className="flex items-start justify-between gap-4">

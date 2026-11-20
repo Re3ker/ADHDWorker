@@ -265,12 +265,21 @@ export function ActionDialog({
           </p>
         ) : null}
 
-        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-wrap gap-2">
+        {/* Eine eindeutige Hauptaktion in voller Breite, Nebenaktionen klein darunter. */}
+        <div className="space-y-2 border-t border-border pt-5">
+          <Button
+            size="lg"
+            className="min-h-12 w-full text-base"
+            onClick={() => void submit()}
+            disabled={pending}
+          >
+            {sendTelegram ? <Send /> : <Icon />} {primaryLabel}
+          </Button>
+          <div className="flex flex-wrap justify-center gap-x-2 gap-y-1">
             {source === "reminder" ? (
               <>
                 <Button variant="ghost" onClick={() => void later("snooze")}>
-                  In 5 Min erinnern
+                  <Clock3 /> In 5 Min erinnern
                 </Button>
                 {type !== "resume" ? (
                   <Button variant="ghost" onClick={() => void later("skip")}>
@@ -284,14 +293,6 @@ export function ActionDialog({
               </Button>
             )}
           </div>
-          <Button
-            size="lg"
-            className="min-h-12 px-5 text-base"
-            onClick={() => void submit()}
-            disabled={pending}
-          >
-            {sendTelegram ? <Send /> : <Icon />} {primaryLabel}
-          </Button>
         </div>
       </div>
     </Dialog>

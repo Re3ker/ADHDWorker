@@ -351,6 +351,10 @@ body,
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  /* Gleiche Spalte wie der Inhalt: 1120px + seitliches Padding, zentriert. */
+  width: 100%;
+  max-width: calc(1120px + 76px);
+  margin-inline: auto;
   padding: 28px 38px 18px;
 }
 .eyebrow {
@@ -389,14 +393,16 @@ body,
 .content-scroll > form,
 .content-scroll > section,
 .content-scroll > div {
+  /* Lesbare Breite, auf großen Bildschirmen mittig neben der Sidebar. */
   max-width: 1120px;
+  margin-inline: auto;
 }
 .update-banner {
   display: flex;
   align-items: center;
   gap: 12px;
   max-width: 1120px;
-  margin: 0 0 18px;
+  margin: 0 auto 18px;
   border: 1px solid oklch(0.55 0.1 235 / 0.45);
   border-radius: 16px;
   background: linear-gradient(

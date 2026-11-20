@@ -22,7 +22,7 @@ export function TaskPanel({ workday }: { workday: WorkdayData }) {
         Jederzeit ergänzbar. Wird automatisch gespeichert und bei Pause und
         Feierabend mitgeschickt.
       </p>
-      <div className="mt-5 grid gap-4 lg:grid-cols-2">
+      <div className="mt-5 space-y-4">
         {Array.from({ length: partCount }, (_, part) => (
           <TaskSection
             key={part}
