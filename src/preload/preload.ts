@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron"
 
 import {
   actionTypeSchema,
+  adjustTimeSchema,
   idSchema,
   previewSchema,
   requestActionSchema,
@@ -14,10 +15,9 @@ import type {
   ActionResponse,
   DashboardData,
   SettingsData,
+  UpdateInfo,
   WorkdayData,
 } from "../shared/types"
-
-type UpdateInfo = { version: string; releaseUrl: string }
 
 function invoke<T>(channel: string, ...args: unknown[]) {
   return ipcRenderer.invoke(channel, ...args) as Promise<T>
@@ -55,6 +55,7 @@ const api = {
   getHistory: () => invoke<WorkdayData[]>("app:get-history"),
   getSettings: () => invoke<SettingsData>("app:get-settings"),
   getUpdate: () => invoke<UpdateInfo | null>("app:get-update"),
+  installUpdate: () => void invoke("app:install-update"),
   openReleasePage: () => void invoke("app:open-release-page"),
 
   previewMessage: (input: unknown) =>
@@ -70,6 +71,10 @@ const api = {
     safely(() => actionTypeSchema.parse(type), "reminder:snooze"),
   skipReminder: (type: unknown) =>
     safely(() => actionTypeSchema.parse(type), "reminder:skip"),
+  unskipReminder: (type: unknown) =>
+    safely(() => actionTypeSchema.parse(type), "reminder:unskip"),
+  adjustTime: (input: unknown) =>
+    safely(() => adjustTimeSchema.parse(input), "day:adjust-time"),
   setTodayPause: (input: unknown) =>
     safely(() => todayPauseSchema.parse(input), "day:set-pause"),
 

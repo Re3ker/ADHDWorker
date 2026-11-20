@@ -33,6 +33,12 @@ export function Dashboard({
 }: DashboardProps) {
   const [manual, setManual] = useState<ActionType | null>(null)
   const workday = data.workday
+  const taskDay =
+    workday && workday.status !== "planned"
+      ? workday
+      : !workday
+        ? data.finishedToday
+        : null
   const failed = [
     ...(workday?.messages ?? []),
     ...(data.finishedToday?.messages ?? []),
@@ -56,9 +62,8 @@ export function Dashboard({
 
       <StatusCard data={data} onAction={setManual} />
 
-      {workday && workday.status !== "planned" ? (
-        <TaskPanel workday={workday} />
-      ) : null}
+      {/* Auch nach dem Feierabend noch ergänzbar, bevor du die Zeiten kopierst. */}
+      {taskDay ? <TaskPanel workday={taskDay} /> : null}
 
       {!workday && data.finishedToday ? (
         <section className="flex flex-col gap-3 rounded-3xl border border-border bg-card p-6 sm:flex-row sm:items-center sm:justify-between">

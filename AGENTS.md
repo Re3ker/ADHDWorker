@@ -38,12 +38,18 @@ Die vier Schritte sind An-/Abmeldungen per Telegram: Anmelden (start), zur Pause
 abmelden (pause), wieder anmelden (resume), Feierabend (end). Eine Erinnerung
 erscheint `leadMinutes` vor der Ziel-Uhrzeit (Anmelden nur Mo–Fr). Bestätigt man
 vor der Uhrzeit, wird die Aktion als `pendingAction` am Workday vorgemerkt und
-genau zur Uhrzeit ausgeführt; danach sofort mit Zeitstempel „jetzt“.
+genau zur Uhrzeit ausgeführt. Liegt die gewählte Uhrzeit schon zurück, wird
+sofort ausgeführt, eingetragen wird aber die gewählte Uhrzeit. Erledigte Schritte
+lassen sich über `adjustTime` nachträglich korrigieren. „Überstunden“ schaltet
+die Feierabend-Erinnerung für heute ab.
 
 Start- und Pausenzeit sind pro Tag flexibel. Der Feierabend wird in
 `computeDayPlan` aus Start + Soll-Minuten + Pausenzeit berechnet.
 
-Aufgaben landen in der letzten Work-Session (auch während der Pause).
+Aufgaben gehören zum Workday und einem Abschnitt (`part`: 0 = vor der Pause,
+1 = nach der Pause, …) und sind jederzeit in jedem Abschnitt ergänzbar, auch
+nach dem Feierabend. Im Export landen Aufgaben eines nicht existierenden
+Abschnitts im letzten Arbeitsabschnitt.
 Break-Sessions zählen nicht zur Arbeitszeit. Es gibt maximal einen offenen
 Arbeitstag und eine aktive Session.
 
@@ -54,6 +60,7 @@ npm install
 npm run dev
 npm run lint
 npm run typecheck
+npm test
 npm run build
 npm run smoke
 npm run icons
@@ -63,6 +70,11 @@ npm run icons
 Desktop-Fenster. `npm run smoke` spielt einen ganzen Tag (vorgemerkte
 Aktionen, flexible Pause, Feierabend nach Soll-Stunden, Erinnerungen) gegen
 SQLite durch. `npm run icons` erzeugt die Icons aus `resources/icon/*.svg`.
+`npm test` (Vitest) prüft die reine Logik in `src/shared/` – neue Rechenlogik
+dort ablegen und testen, nicht im Main-Prozess. Releases entstehen nur durch
+Tags (`npm version patch && git push --follow-tags`); die installierte App
+aktualisiert sich per `electron-updater`. Vor den Migrationen wird täglich eine
+DB-Sicherung in `userData/backups/` angelegt (14 Tage).
 
 ## Skills
 

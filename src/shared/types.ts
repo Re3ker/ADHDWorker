@@ -6,14 +6,13 @@ export type WorkdayStatus =
   "planned" | "working" | "paused" | "finished" | "cancelled"
 export type MessageStatus = "pending" | "sent" | "failed" | "cancelled"
 
-export type TaskData = { id: string; content: string }
+export type TaskData = { id: string; content: string; part: number }
 
 export type SessionData = {
   id: string
   type: "work" | "break"
   startedAt: string
   endedAt: string | null
-  tasks: TaskData[]
 }
 
 export type MessageData = {
@@ -36,6 +35,7 @@ export type WorkdayData = {
   pendingAction: ActionType | null
   pendingActionAt: string | null
   sessions: SessionData[]
+  tasks: TaskData[]
   messages: MessageData[]
 }
 
@@ -65,6 +65,18 @@ export type DashboardData = {
     sendImmediately: Record<ActionType, boolean>
   }
   reminder: ReminderData | null
+  /** Heute abgeschaltete Erinnerungen („end“ = Überstunden). */
+  skippedReminders: ActionType[]
+}
+
+/**
+ * available = nur Hinweis (portable EXE), downloading = lädt im Hintergrund,
+ * ready = installiert sich beim Beenden oder per „Jetzt neu starten“.
+ */
+export type UpdateInfo = {
+  version: string
+  releaseUrl: string
+  state: "available" | "downloading" | "ready"
 }
 
 export type ActionResponse = { ok: true } | { ok: false; error: string }

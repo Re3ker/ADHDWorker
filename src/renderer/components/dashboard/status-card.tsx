@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Check, Pencil, Timer, X } from "lucide-react"
+import { Bell, Check, Pencil, Timer, X } from "lucide-react"
 
 import { computeDayPlan } from "../../../shared/day-plan"
 import {
@@ -10,7 +10,11 @@ import {
   minutesBetween,
   todayAt,
 } from "../../../shared/time"
-import type { ActionType, DashboardData } from "../../../shared/types"
+import type {
+  ActionResponse,
+  ActionType,
+  DashboardData,
+} from "../../../shared/types"
 import { ACTIONS, useNow } from "../../lib/actions"
 import { Button } from "../ui/button"
 
@@ -25,28 +29,31 @@ export function StatusCard({
 }) {
   const now = useNow()
   const { workday, settings } = data
-  const plan = computeDayPlan(now, settings, workday)
-  const status = workday?.status ?? (data.finishedToday ? "finished" : "none")
-  const hadBreak =
-    workday?.sessions.some((session) => session.type === "break") ?? false
-  const breakSession = workday?.sessions.find(
-    (session) => session.type === "break"
-  )
+  // Nach dem Feierabend ist kein Tag mehr offen – dann den heutigen zeigen.
+  const day = workday ?? data.finishedToday
+  const plan = computeDayPlan(now, settings, day)
+  const status = day?.status ?? "none"
+  const breakSession = day?.sessions.find((session) => session.type === "break")
+  const hadBreak = Boolean(breakSession)
+  const overtime = data.skippedReminders.includes("end")
+  const extraMinutes = plan.netMinutes - settings.targetWorkMinutes
 
   const headline = {
     none: isWeekday(now) ? "Noch nicht angemeldet" : "Heute ist frei",
     planned: "Anmeldung vorgemerkt",
-    working: "Du bist angemeldet",
+    working: overtime ? "Du machst Überstunden" : "Du bist angemeldet",
     paused: `Pause bis ${formatTime(plan.resumeAt)}`,
     finished: "Feierabend!",
     cancelled: "Noch nicht angemeldet",
   }[status]
 
+  const started =
+    status !== "none" && status !== "planned" && status !== "cancelled"
   const steps: Array<{ type: ActionType; time: string; state: StepState }> = [
     {
       type: "start",
-      time: formatTime(workday?.actualStartAt ?? plan.startAt),
-      state: workday && workday.status !== "planned" ? "done" : "next",
+      time: formatTime(plan.startAt),
+      state: started ? "done" : "next",
     },
     {
       type: "pause",
@@ -55,7 +62,7 @@ export function StatusCard({
     },
     {
       type: "resume",
-      time: formatTime(breakSession?.endedAt ?? plan.resumeAt),
+      time: formatTime(plan.resumeAt),
       state: breakSession?.endedAt
         ? "done"
         : status === "paused"
@@ -87,6 +94,42 @@ export function StatusCard({
           : null
   const showStats = status === "working" || status === "paused"
 
+  function adjust(step: ActionType) {
+    return (at: string) =>
+      window.adhdworker.adjustTime({ workdayId: day?.id, step, at })
+  }
+
+  function editorFor(step: ActionType, state: StepState, time: string) {
+    if (!day) return null
+    if (state === "done") {
+      return <TimeEditor time={time} label="ändern" onSave={adjust(step)} />
+    }
+    if (step === "pause" && (status === "working" || status === "planned")) {
+      return (
+        <TimeEditor
+          time={time}
+          minutes={plan.pauseMinutes}
+          label={`${plan.pauseMinutes} Min · ändern`}
+          onSave={(at, minutes) =>
+            window.adhdworker.setTodayPause({ at, minutes })
+          }
+        />
+      )
+    }
+    if (step === "end" && status === "working" && overtime) {
+      return (
+        <button
+          type="button"
+          onClick={() => void window.adhdworker.unskipReminder("end")}
+          className="mt-1 inline-flex items-center gap-1 text-xs text-amber-300 hover:text-foreground"
+        >
+          <Bell className="size-3" /> Überstunden · doch erinnern
+        </button>
+      )
+    }
+    return null
+  }
+
   return (
     <section className="rounded-3xl border border-border bg-card p-6 shadow-sm sm:p-8">
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
@@ -107,11 +150,24 @@ export function StatusCard({
               ans Anmelden.
             </p>
           ) : null}
+          {status === "working" && overtime ? (
+            <p className="mt-2 text-muted-foreground">
+              Keine Feierabend-Erinnerung mehr – melde dich selbst ab, wenn du
+              fertig bist.
+            </p>
+          ) : null}
         </div>
         {showStats ? (
           <div className="grid grid-cols-3 gap-3 text-center">
             <Stat label="Netto" value={formatDuration(plan.netMinutes)} />
-            <Stat label="Noch" value={formatDuration(plan.remainingMinutes)} />
+            {extraMinutes > 0 ? (
+              <Stat label="Mehr" value={`+${formatDuration(extraMinutes)}`} />
+            ) : (
+              <Stat
+                label="Noch"
+                value={formatDuration(plan.remainingMinutes)}
+              />
+            )}
             <Stat label="Feierabend" value={formatTime(plan.endAt)} highlight />
           </div>
         ) : null}
@@ -136,12 +192,7 @@ export function StatusCard({
               {ACTIONS[step.type].step}
             </p>
             <p className="mt-1 font-mono text-xl font-semibold">{step.time}</p>
-            {step.type === "pause" && step.state !== "done" && workday ? (
-              <PauseEditor
-                time={formatTime(plan.pauseAt)}
-                minutes={plan.pauseMinutes}
-              />
-            ) : null}
+            {editorFor(step.type, step.state, step.time)}
           </li>
         ))}
       </ol>
@@ -253,17 +304,25 @@ function PendingBanner({
   )
 }
 
-function PauseEditor({ time, minutes }: { time: string; minutes: number }) {
+/** Uhrzeit (und optional Dauer) direkt im Tagesplan ändern. */
+function TimeEditor({
+  time,
+  minutes,
+  label,
+  onSave,
+}: {
+  time: string
+  minutes?: number
+  label: string
+  onSave: (at: string, minutes: number) => Promise<ActionResponse>
+}) {
   const [open, setOpen] = useState(false)
   const [value, setValue] = useState(time)
-  const [length, setLength] = useState(minutes)
+  const [length, setLength] = useState(minutes ?? 0)
   const [error, setError] = useState<string | null>(null)
 
   async function save() {
-    const result = await window.adhdworker.setTodayPause({
-      at: value,
-      minutes: length,
-    })
+    const result = await onSave(value, length)
     if (result.ok) setOpen(false)
     setError(result.ok ? null : result.error)
   }
@@ -274,12 +333,13 @@ function PauseEditor({ time, minutes }: { time: string; minutes: number }) {
         type="button"
         onClick={() => {
           setValue(time)
-          setLength(minutes)
+          setLength(minutes ?? 0)
+          setError(null)
           setOpen(true)
         }}
         className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
       >
-        <Pencil className="size-3" /> {minutes} Min · heute ändern
+        <Pencil className="size-3" /> {label}
       </button>
     )
   }
@@ -290,18 +350,23 @@ function PauseEditor({ time, minutes }: { time: string; minutes: number }) {
           type="time"
           value={value}
           onChange={(event) => setValue(event.target.value)}
-          className="min-h-8 rounded-lg border border-input bg-background px-1"
+          className="min-h-8 rounded-lg border border-input bg-background px-1 text-foreground"
+          aria-label="Uhrzeit"
         />
-        <input
-          type="number"
-          min={1}
-          max={240}
-          value={length}
-          onChange={(event) => setLength(Number(event.target.value) || 1)}
-          className="min-h-8 w-14 rounded-lg border border-input bg-background px-1"
-          aria-label="Pausendauer in Minuten"
-        />
-        Min
+        {minutes !== undefined ? (
+          <>
+            <input
+              type="number"
+              min={1}
+              max={240}
+              value={length}
+              onChange={(event) => setLength(Number(event.target.value) || 1)}
+              className="min-h-8 w-14 rounded-lg border border-input bg-background px-1 text-foreground"
+              aria-label="Pausendauer in Minuten"
+            />
+            Min
+          </>
+        ) : null}
       </div>
       <div className="flex gap-1">
         <Button size="xs" onClick={() => void save()}>

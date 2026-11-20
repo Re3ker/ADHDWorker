@@ -25,6 +25,13 @@ type ActionDialogProps = {
 
 const NOW = "now"
 
+const SKIP_LABEL: Record<ActionType, string> = {
+  start: "Heute frei",
+  pause: "Heute keine Pause",
+  resume: "",
+  end: "Überstunden – ich melde mich selbst ab",
+}
+
 function unique(values: string[]) {
   return [...new Set(values)]
 }
@@ -98,7 +105,8 @@ export function ActionDialog({
     setError(null)
     const result = await window.adhdworker.requestAction({
       type,
-      at: isLater ? choice : null,
+      // Gewählte Uhrzeit wird immer eingetragen, auch wenn sie schon vorbei ist.
+      at: choice === NOW ? null : choice,
       message: sendTelegram ? (edited ? message : null) : "",
       ...(type === "pause" ? { pauseMinutes } : {}),
       sendNow: isLater && sendTelegram && sendNow,
@@ -116,32 +124,37 @@ export function ActionDialog({
 
   const Icon = copy.icon
   const verb = copy.verb
-  const primaryLabel = isLater ? `Um ${choice} ${verb}` : `Jetzt ${verb}`
+  const primaryLabel = isLater
+    ? `Um ${choice} ${verb}`
+    : overdueMinutes > 0
+      ? `Jetzt ${verb} (ab ${choice})`
+      : `Jetzt ${verb}`
 
   return (
     <Dialog
       eyebrow={source === "reminder" ? "Erinnerung" : "Jetzt melden"}
       title={copy.title}
-      tone={overdueMinutes > 0 ? "alert" : "default"}
       description={
-        !isLater
-          ? "Die Meldung geht sofort raus."
-          : sendTelegram && sendNow
-            ? `Die Nachricht geht sofort raus, deine Zeit zählt ab ${choice}.`
-            : `Bestätige jetzt – die Meldung geht automatisch genau um ${choice} raus.`
+        overdueMinutes > 0
+          ? `Die Meldung geht sofort raus, eingetragen wird ${choice}.`
+          : !isLater
+            ? "Die Meldung geht sofort raus."
+            : sendTelegram && sendNow
+              ? `Die Nachricht geht sofort raus, deine Zeit zählt ab ${choice}.`
+              : `Bestätige jetzt – die Meldung geht automatisch genau um ${choice} raus.`
       }
       onClose={source === "manual" ? onClose : undefined}
     >
       <div className="space-y-5">
         {overdueMinutes > 0 ? (
-          <div className="flex items-start gap-3 rounded-2xl border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">
+          <div className="flex items-start gap-3 rounded-2xl border border-amber-400/50 bg-amber-400/10 p-4 text-sm text-amber-200">
             <AlertTriangle className="mt-0.5 size-5 shrink-0" />
             <p>
               <strong>
                 {choice} ist seit {overdueMinutes} Min vorbei.
               </strong>{" "}
-              Klicke unten, dann wirst du jetzt sofort{" "}
-              {verb.replace(" (Feierabend)", "")}.
+              Eingetragen wird trotzdem {choice}. Wähle „Jetzt“, wenn die
+              aktuelle Uhrzeit zählen soll.
             </p>
           </div>
         ) : null}
@@ -253,16 +266,15 @@ export function ActionDialog({
         ) : null}
 
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {source === "reminder" ? (
               <>
                 <Button variant="ghost" onClick={() => void later("snooze")}>
                   In 5 Min erinnern
                 </Button>
-                {type === "start" || type === "pause" ? (
+                {type !== "resume" ? (
                   <Button variant="ghost" onClick={() => void later("skip")}>
-                    <BellOff />{" "}
-                    {type === "start" ? "Heute frei" : "Heute keine Pause"}
+                    <BellOff /> {SKIP_LABEL[type]}
                   </Button>
                 ) : null}
               </>

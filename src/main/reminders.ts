@@ -1,6 +1,6 @@
-import { computeDayPlan } from "../shared/day-plan"
+import { pickReminder } from "../shared/reminder-logic"
 import type { ActionType } from "../shared/schemas"
-import { addMinutes, dateKey, isWeekday, todayAt } from "../shared/time"
+import { dateKey } from "../shared/time"
 import type { ReminderData } from "../shared/types"
 import { getSettings } from "./settings-service"
 import { getCurrentWorkday, hasStartedToday } from "./workday-service"
@@ -17,45 +17,32 @@ export function skipReminderToday(type: ActionType) {
   skippedOn.set(type, dateKey())
 }
 
-/**
- * Welche Erinnerung ist gerade fällig? Sichtbar ab Ziel-Uhrzeit − Vorlauf,
- * bis reagiert wurde. Die Anmelde-Erinnerung kommt nur Mo–Fr.
- */
+export function unskipReminder(type: ActionType) {
+  skippedOn.delete(type)
+  snoozedUntil.delete(type)
+}
+
+/** Für heute abgeschaltete Erinnerungen, z. B. Feierabend bei Überstunden. */
+export function skippedToday(now = new Date()): ActionType[] {
+  const today = dateKey(now)
+  return [...skippedOn].filter(([, day]) => day === today).map(([type]) => type)
+}
+
+/** Aktuell fällige Erinnerung mit den Daten aus SQLite und dem Speicher. */
 export async function currentReminder(
   now = new Date()
 ): Promise<ReminderData | null> {
-  const [settings, workday] = await Promise.all([
+  const [settings, workday, startedToday] = await Promise.all([
     getSettings(),
     getCurrentWorkday(),
+    hasStartedToday(now),
   ])
-  if (workday?.pendingAction) return null
-
-  const today = dateKey(now)
-  const isSkipped = (type: ActionType) => skippedOn.get(type) === today
-  let candidate: { type: ActionType; dueAt: Date } | null = null
-
-  if (!workday) {
-    if (!isWeekday(now) || isSkipped("start") || (await hasStartedToday(now))) {
-      return null
-    }
-    candidate = { type: "start", dueAt: todayAt(settings.startTime, now) }
-  } else {
-    const plan = computeDayPlan(now, settings, workday)
-    const hadBreak = workday.sessions.some(
-      (session) => session.type === "break"
-    )
-    if (workday.status === "working") {
-      candidate =
-        hadBreak || isSkipped("pause")
-          ? { type: "end", dueAt: plan.endAt }
-          : { type: "pause", dueAt: plan.pauseAt }
-    } else if (workday.status === "paused") {
-      candidate = { type: "resume", dueAt: plan.resumeAt }
-    }
-  }
-
-  if (!candidate || isSkipped(candidate.type)) return null
-  if ((snoozedUntil.get(candidate.type) ?? 0) > now.getTime()) return null
-  if (now < addMinutes(candidate.dueAt, -settings.leadMinutes)) return null
-  return { type: candidate.type, dueAt: candidate.dueAt.toISOString() }
+  const reminder = pickReminder(now, settings, workday, {
+    startedToday,
+    skipped: skippedToday(now),
+    snoozedUntil: Object.fromEntries(snoozedUntil),
+  })
+  return reminder
+    ? { type: reminder.type, dueAt: reminder.dueAt.toISOString() }
+    : null
 }

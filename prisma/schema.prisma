@@ -47,6 +47,7 @@ model Workday {
   updatedAt        DateTime          @updatedAt
   sessions         WorkSession[]
   telegramMessages TelegramMessage[]
+  tasks            Task[]
 
   @@index([status, scheduledStartAt])
   @@index([createdAt])
@@ -62,20 +63,21 @@ model WorkSession {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   workday   Workday   @relation(fields: [workdayId], references: [id], onDelete: Cascade)
-  tasks     Task[]
 
   @@index([workdayId, type, startedAt])
 }
 
 model Task {
-  id            String      @id @default(cuid())
-  workSessionId String
-  content       String
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
-  workSession   WorkSession @relation(fields: [workSessionId], references: [id], onDelete: Cascade)
+  id        String   @id @default(cuid())
+  workdayId String
+  /// Abschnitt des Tages: 0 = vor der Pause, 1 = nach der Pause, …
+  part      Int      @default(0)
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  workday   Workday  @relation(fields: [workdayId], references: [id], onDelete: Cascade)
 
-  @@index([workSessionId, createdAt])
+  @@index([workdayId, part, createdAt])
 }
 
 model TelegramMessage {

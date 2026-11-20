@@ -12,6 +12,7 @@ import { runMigrations } from "../src/main/migrations"
 import { currentReminder } from "../src/main/reminders"
 import { getSettings } from "../src/main/settings-service"
 import {
+  adjustTime,
   createTask,
   getCurrentWorkday,
   getWorkdayById,
@@ -93,19 +94,24 @@ try {
       "Startzeit ist nicht 09:00"
     )
 
-    await createTask({ content: "Tickets beantwortet" })
+    await createTask({ workdayId, part: 0, content: "Tickets beantwortet" })
+    // Vorab für die zweite Tageshälfte notiert – darf nicht in die Pause-Nachricht.
+    await createTask({ workdayId, part: 1, content: "Vorab notiert" })
 
-    // 3. Pause heute um 12:30 statt 12:00.
-    await requestAction(
+    // 3. Pause 12:30 erst um 12:40 bestätigt → eingetragen wird 12:30.
+    const paused = await requestAction(
       { type: "pause", at: "12:30", message: null, pauseMinutes: 30 },
-      at("12:29")
+      at("12:40")
     )
-    const paused = await runDuePendingAction(at("12:30"))
-    assert(paused?.type === "pause", "Pause nicht ausgeführt")
+    assert(paused.executed?.type === "pause", "Pause nicht ausgeführt")
+    assert(
+      (await getSettings()).pauseTime === "12:30",
+      "Pausenzeit 12:30 wurde nicht als Standard gemerkt"
+    )
 
-    // 4. Fünf Minuten zu spät zurück → sofort, Zeitstempel = jetzt.
+    // 4. Fünf Minuten zu spät zurück, „Jetzt“ gewählt → 13:05.
     const resumed = await requestAction(
-      { type: "resume", at: "13:00", message: null },
+      { type: "resume", at: null, message: null },
       at("13:05")
     )
     assert(
@@ -122,7 +128,9 @@ try {
       `Feierabend ${formatTime(plan.endAt)} statt 17:35`
     )
 
-    await createTask({ content: "Review gemacht" })
+    await createTask({ workdayId, part: 1, content: "Review gemacht" })
+    // Nachmittags etwas für vor der Pause nachgetragen.
+    await createTask({ workdayId, part: 0, content: "Nachtrag" })
     const ended = await requestAction(
       { type: "end", at: null, message: null },
       plan.endAt
@@ -131,16 +139,16 @@ try {
 
     const finished = await getWorkdayById(workdayId)
     assert(finished?.status === "finished", "Tag nicht beendet")
-    const blocks = createDayBlocks(finished.sessions)
+    const blocks = createDayBlocks(finished.sessions, finished.tasks)
     assert(blocks.length === 2, "Es sollten zwei Abschnitte sein")
     assert(
-      blocks[0].tasks === "Tickets beantwortet" &&
+      blocks[0].tasks === "Tickets beantwortet, Nachtrag" &&
         blocks[0].start === "0900" &&
         blocks[0].end === "1230",
       "Block 1 falsch"
     )
     assert(
-      blocks[1].tasks === "Review gemacht" &&
+      blocks[1].tasks === "Vorab notiert, Review gemacht" &&
         blocks[1].start === "1305" &&
         blocks[1].end === "1735",
       "Block 2 falsch"
@@ -149,15 +157,43 @@ try {
       (message) => message.type === "pause"
     )
     assert(
-      pauseMessage?.content.includes("Tickets beantwortet"),
-      "Pause-Nachricht ohne Aufgaben"
+      pauseMessage?.content.includes("Tickets beantwortet") &&
+        !pauseMessage.content.includes("Vorab notiert"),
+      "Pause-Nachricht mit falschen Aufgaben"
+    )
+    const endMessage = finished.telegramMessages.find(
+      (message) => message.type === "end"
+    )
+    assert(
+      endMessage?.content.includes("Vorab notiert") &&
+        endMessage.content.includes("Review gemacht"),
+      "Feierabend-Nachricht ohne Aufgaben nach der Pause"
     )
     assert(
       finished.telegramMessages.length === 4,
       "Es sollten vier Meldungen sein"
     )
 
-    // 6. Erinnerungen: Montag 08:44 → Anmelden; 08:43 → noch nicht; Samstag → nie.
+    // 6. Zeiten nachträglich korrigieren.
+    const lateEvening = at("23:59")
+    await adjustTime({ workdayId, step: "start", at: "08:55" }, lateEvening)
+    await adjustTime({ workdayId, step: "end", at: "17:40" }, lateEvening)
+    const invalid = await adjustTime(
+      { workdayId, step: "resume", at: "12:20" },
+      lateEvening
+    ).then(
+      () => false,
+      () => true
+    )
+    assert(invalid, "Wieder da vor Pausenbeginn wurde akzeptiert")
+    const correctedDay = (await getWorkdayById(workdayId))!
+    const corrected = createDayBlocks(correctedDay.sessions, correctedDay.tasks)
+    assert(
+      corrected[0].start === "0855" && corrected[1].end === "1740",
+      "Korrektur nicht übernommen"
+    )
+
+    // 7. Erinnerungen: Montag 08:44 → Anmelden; 08:43 → noch nicht; Samstag → nie.
     const monday = (time: string) =>
       fromZonedTime(`2099-01-05T${time}:00`, APP_TIMEZONE)
     assert(

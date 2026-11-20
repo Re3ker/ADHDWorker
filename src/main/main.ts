@@ -3,16 +3,18 @@ import { config as loadEnv } from "dotenv"
 import { mkdirSync } from "node:fs"
 import { join } from "node:path"
 
+import { backupDatabase } from "./backup"
 import { configureDatabase, disconnectDatabase } from "./db"
 import { registerIpc } from "./ipc-handlers"
 import { runMigrations } from "./migrations"
 import { getSettings } from "./settings-service"
-import { checkForUpdate } from "./update-service"
+import { startUpdateChecks } from "./update-service"
 import {
   applyLaunchAtLogin,
   createTray,
   createWindow,
   markQuitting,
+  notify,
   sendToRenderer,
   setMinimizeOnClose,
   showWindow,
@@ -42,6 +44,7 @@ app
     const migrations = app.isPackaged
       ? join(process.resourcesPath, "migrations")
       : join(app.getAppPath(), "prisma", "migrations")
+    backupDatabase(databasePath)
     await runMigrations(databasePath, migrations)
     configureDatabase(databasePath)
 
@@ -54,8 +57,14 @@ app
     createWindow({ hidden: process.argv.includes("--hidden") })
     startWorker()
 
-    void checkForUpdate().then((update) => {
-      if (update) sendToRenderer("app:update-available", update)
+    startUpdateChecks((update) => {
+      sendToRenderer("app:update-available", update)
+      if (update.state === "ready") {
+        notify(
+          `ADHDWorker ${update.version} ist bereit`,
+          "Wird beim Beenden installiert – oder jetzt in der App neu starten."
+        )
+      }
     })
     app.on("activate", () => showWindow())
   })

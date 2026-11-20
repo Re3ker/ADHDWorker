@@ -7,6 +7,7 @@ import {
   tasksForMessage,
 } from "../shared/message-templates"
 import {
+  adjustTimeSchema,
   requestActionSchema,
   taskSchema,
   todayPauseSchema,
@@ -21,10 +22,8 @@ const ACTIVE_WORKDAY_KEY = "current-workday"
 const ACTIVE_SESSION_KEY = "current-session"
 
 const workdayInclude = {
-  sessions: {
-    orderBy: { startedAt: "asc" },
-    include: { tasks: { orderBy: { createdAt: "asc" } } },
-  },
+  sessions: { orderBy: { startedAt: "asc" } },
+  tasks: { orderBy: [{ part: "asc" }, { createdAt: "asc" }] },
   telegramMessages: { orderBy: { createdAt: "asc" } },
 } satisfies Prisma.WorkdayInclude
 
@@ -116,7 +115,11 @@ export function serializeWorkday(workday: FullWorkday): WorkdayData {
       type: session.type as "work" | "break",
       startedAt: session.startedAt.toISOString(),
       endedAt: iso(session.endedAt),
-      tasks: session.tasks.map(({ id, content }) => ({ id, content })),
+    })),
+    tasks: workday.tasks.map(({ id, content, part }) => ({
+      id,
+      content,
+      part,
     })),
     messages: workday.telegramMessages.map((message) => ({
       id: message.id,
@@ -147,11 +150,14 @@ async function renderMessage(
   const sessions = workday?.sessions ?? []
   const workSessions = sessions.filter((session) => session.type === "work")
   const lastWork = workSessions.at(-1)
-  // Pause: alle Aufgaben des Tages. Feierabend: Aufgaben seit der Pause.
+  const current = Math.max(0, workSessions.length - 1)
+  const allTasks = workday?.tasks ?? []
+  // Pause: alle Aufgaben bis jetzt (ohne vorab notierte für später).
+  // Feierabend: Aufgaben seit der Pause.
   const tasks =
     type === "pause"
-      ? workSessions.flatMap((session) => session.tasks)
-      : (lastWork?.tasks ?? [])
+      ? allTasks.filter((task) => task.part <= current)
+      : allTasks.filter((task) => task.part >= current)
   const startedAt =
     type === "end" ? lastWork?.startedAt : workday?.actualStartAt
   return renderMessageTemplate(templates[type], {
@@ -192,6 +198,9 @@ async function executeAction(
   if (!REQUIRED_STATUS[type].includes(workday.status)) fail(WRONG_STATUS[type])
 
   const openSession = workday.sessions.find((session) => !session.endedAt)
+  if (openSession && at <= openSession.startedAt) {
+    fail(`Wähle eine Uhrzeit nach ${formatTime(openSession.startedAt)}.`)
+  }
   const content =
     message === null ? await renderMessage(tx, type, workday, at) : message
 
@@ -240,7 +249,8 @@ async function executeAction(
 
 /**
  * Vom Dialog bestätigt: liegt die Ziel-Uhrzeit in der Zukunft, wird die Aktion
- * vorgemerkt und vom Worker pünktlich ausgeführt. Sonst sofort.
+ * vorgemerkt und vom Worker pünktlich ausgeführt. Liegt sie schon zurück, wird
+ * sie sofort ausgeführt – eingetragen wird trotzdem die gewählte Uhrzeit.
  */
 export async function requestAction(input: unknown, now = new Date()) {
   const parsed = requestActionSchema.parse(input)
@@ -249,6 +259,9 @@ export async function requestAction(input: unknown, now = new Date()) {
 
   return getDb().$transaction(async (tx) => {
     let workday = await getCurrentWorkday(tx)
+    if (parsed.type === "pause" && parsed.at) {
+      await rememberPauseTime(tx, parsed.at)
+    }
     if (parsed.type === "pause" && parsed.pauseMinutes && workday) {
       await tx.workday.update({
         where: { id: workday.id },
@@ -256,7 +269,7 @@ export async function requestAction(input: unknown, now = new Date()) {
       })
     }
     if (runNow) {
-      const executed = await executeAction(tx, parsed.type, now, parsed.message)
+      const executed = await executeAction(tx, parsed.type, at, parsed.message)
       return { executed, messageId: null }
     }
 
@@ -370,21 +383,90 @@ export async function setTodayPause(input: unknown, now = new Date()) {
       pauseMinutes: parsed.minutes,
     },
   })
+  await rememberPauseTime(getDb(), parsed.at)
+}
+
+/** Zuletzt gewählte Pausenzeit wird zum neuen Standard für die nächsten Tage. */
+async function rememberPauseTime(client: Tx, time: string) {
+  await getSettings(client)
+  await client.settings.update({ where: { id: 1 }, data: { pauseTime: time } })
+}
+
+/**
+ * Uhrzeit eines bereits erledigten Schritts korrigieren. Verschiebt dabei die
+ * Grenze zwischen den angrenzenden Abschnitten, Telegram bleibt unberührt.
+ */
+export async function adjustTime(input: unknown, now = new Date()) {
+  const { workdayId, step, at: time } = adjustTimeSchema.parse(input)
+  return getDb().$transaction(async (tx) => {
+    const workday = await tx.workday.findUnique({
+      where: { id: workdayId },
+      include: workdayInclude,
+    })
+    if (!workday?.actualStartAt) fail("Dieser Tag wurde nicht gefunden.")
+    const at = todayAt(time, workday.actualStartAt)
+    if (at > now) fail("Die Uhrzeit liegt in der Zukunft.")
+
+    const sessions = workday.sessions
+    const breakIndex = sessions.findIndex((session) => session.type === "break")
+    const check = (lower: Date | null, upper: Date | null) => {
+      if ((lower && at <= lower) || (upper && at >= upper)) {
+        fail(
+          `Wähle eine Uhrzeit${lower ? ` nach ${formatTime(lower)}` : ""}${
+            lower && upper ? " und" : ""
+          }${upper ? ` vor ${formatTime(upper)}` : ""}.`
+        )
+      }
+    }
+    const setSession = (id: string, data: Prisma.WorkSessionUpdateInput) =>
+      tx.workSession.update({ where: { id }, data })
+    const setWorkday = (data: Prisma.WorkdayUpdateInput) =>
+      tx.workday.update({ where: { id: workday.id }, data })
+
+    if (step === "start") {
+      const first = sessions[0]
+      if (!first) fail("Es gibt noch keinen Arbeitsabschnitt.")
+      check(null, first.endedAt ?? now)
+      await setSession(first.id, { startedAt: at })
+      await setWorkday({ actualStartAt: at, scheduledStartAt: at })
+    } else if (step === "pause" || step === "resume") {
+      const pause = sessions[breakIndex]
+      if (!pause) fail("Du warst heute noch nicht in der Pause.")
+      if (step === "pause") {
+        const before = sessions[breakIndex - 1]
+        check(before?.startedAt ?? null, pause.endedAt ?? now)
+        if (before) await setSession(before.id, { endedAt: at })
+        await setSession(pause.id, { startedAt: at })
+        await setWorkday({ plannedPauseAt: at })
+      } else {
+        const after = sessions[breakIndex + 1]
+        if (!pause.endedAt || !after) fail("Du bist noch in der Pause.")
+        check(pause.startedAt, after.endedAt ?? now)
+        await setSession(pause.id, { endedAt: at })
+        await setSession(after.id, { startedAt: at })
+      }
+    } else {
+      const last = sessions.at(-1)
+      if (workday.status !== "finished" || !last) {
+        fail("Den Feierabend kannst du erst nach dem Abmelden ändern.")
+      }
+      check(last.startedAt, null)
+      await setSession(last.id, { endedAt: at })
+      await setWorkday({ endedAt: at })
+    }
+  })
 }
 
 // ---------- Aufgaben ----------
 
+/** Aufgaben lassen sich jederzeit jedem Abschnitt des Tages zuordnen. */
 export async function createTask(input: unknown) {
-  const { content } = taskSchema.parse(input)
-  const workday = await getCurrentWorkday()
-  // Während der Pause landet die Aufgabe im letzten Arbeitsabschnitt.
-  const session = workday?.sessions
-    .filter((item) => item.type === "work")
-    .at(-1)
-  if (!workday || !session) {
+  const { workdayId, part, content } = taskSchema.parse(input)
+  const workday = await getDb().workday.findUnique({ where: { id: workdayId } })
+  if (!workday || workday.status === "cancelled") {
     fail("Melde dich zuerst an, dann kannst du Aufgaben erfassen.")
   }
-  return getDb().task.create({ data: { workSessionId: session.id, content } })
+  return getDb().task.create({ data: { workdayId, part, content } })
 }
 
 export async function updateTask(input: unknown) {

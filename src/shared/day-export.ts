@@ -5,8 +5,9 @@ type ExportSession = {
   type: string
   startedAt: Date | string
   endedAt: Date | string | null
-  tasks: Array<{ content: string }>
 }
+
+type ExportTask = { part: number; content: string }
 
 export type DayBlock = {
   id: string
@@ -16,21 +17,36 @@ export type DayBlock = {
   end: string
 }
 
-function blockLabel(index: number, count: number) {
-  if (count === 1) return "Arbeitstag"
-  if (count === 2) return index === 0 ? "Vor der Pause" : "Nach der Pause"
-  return `Abschnitt ${index + 1}`
+/** 0 = „Vor der Pause“, 1 = „Nach der Pause“, danach „Abschnitt 3“ … */
+export function partLabel(part: number) {
+  if (part === 0) return "Vor der Pause"
+  if (part === 1) return "Nach der Pause"
+  return `Abschnitt ${part + 1}`
+}
+
+/**
+ * Abschnitt, in dem eine Aufgabe exportiert wird. Aufgaben für einen Abschnitt,
+ * den es (noch) nicht gibt – z. B. Tag ohne Pause – landen im letzten.
+ */
+export function exportPart(part: number, workSessionCount: number) {
+  return Math.min(part, Math.max(0, workSessionCount - 1))
 }
 
 /** Ein Block pro beendeter Arbeitssession: Aufgaben, Start (0845), Ende. */
-export function createDayBlocks(sessions: ExportSession[]): DayBlock[] {
+export function createDayBlocks(
+  sessions: ExportSession[],
+  tasks: ExportTask[]
+): DayBlock[] {
   const work = sessions.filter(
     (session) => session.type === "work" && session.endedAt
   )
   return work.map((session, index) => ({
     id: session.id,
-    label: blockLabel(index, work.length),
-    tasks: session.tasks.map((task) => task.content).join(", "),
+    label: work.length === 1 ? "Arbeitstag" : partLabel(index),
+    tasks: tasks
+      .filter((task) => exportPart(task.part, work.length) === index)
+      .map((task) => task.content)
+      .join(", "),
     start: formatClock(session.startedAt),
     end: formatClock(session.endedAt),
   }))

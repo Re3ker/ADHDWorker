@@ -91,7 +91,10 @@ export function SettingsForm({
               className={inputClass}
             />
           </Field>
-          <Field label="Pause um" hint="Standard-Pausenbeginn">
+          <Field
+            label="Pause um"
+            hint="Merkt sich die zuletzt gewählte Pausenzeit"
+          >
             <input
               type="time"
               value={values.pauseTime}

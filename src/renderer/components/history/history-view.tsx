@@ -38,10 +38,7 @@ export function HistoryView({
   return (
     <div className="space-y-4">
       {days.map((day) => {
-        const taskCount = day.sessions.reduce(
-          (sum, session) => sum + session.tasks.length,
-          0
-        )
+        const taskCount = day.tasks.length
         return (
           <article
             key={day.id}

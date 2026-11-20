@@ -30,11 +30,30 @@ export const todayPauseSchema = z.object({
   minutes: z.number().int().min(1).max(240),
 })
 
-export const taskSchema = z.object({
-  content: z.string().trim().min(1, "Bitte beschreibe die Aufgabe.").max(500),
+/** Zeit eines erledigten Schritts nachträglich korrigieren. */
+export const adjustTimeSchema = z.object({
+  workdayId: z.string().min(1),
+  step: actionTypeSchema,
+  at: time,
 })
 
-export const updateTaskSchema = taskSchema.extend({ taskId: z.string().min(1) })
+const taskContent = z
+  .string()
+  .trim()
+  .min(1, "Bitte beschreibe die Aufgabe.")
+  .max(500)
+
+/** part: 0 = vor der Pause, 1 = nach der Pause, … */
+export const taskSchema = z.object({
+  workdayId: z.string().min(1),
+  part: z.number().int().min(0).max(10),
+  content: taskContent,
+})
+
+export const updateTaskSchema = z.object({
+  taskId: z.string().min(1),
+  content: taskContent,
+})
 export const idSchema = z.string().min(1).max(100)
 
 export const settingsSchema = z.object({
@@ -61,5 +80,6 @@ export const settingsSchema = z.object({
 export type ActionType = z.infer<typeof actionTypeSchema>
 export type RequestActionInput = z.infer<typeof requestActionSchema>
 export type PreviewInput = z.infer<typeof previewSchema>
+export type AdjustTimeInput = z.infer<typeof adjustTimeSchema>
 export type TodayPauseInput = z.infer<typeof todayPauseSchema>
 export type SettingsInput = z.infer<typeof settingsSchema>

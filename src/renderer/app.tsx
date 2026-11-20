@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useState } from "react"
 import { Download, X } from "lucide-react"
 
-import type { DashboardData, SettingsData, WorkdayData } from "../shared/types"
+import type {
+  DashboardData,
+  SettingsData,
+  WorkdayData,
+  UpdateInfo,
+} from "../shared/types"
 import { AppShell, type Page } from "./components/app-shell"
 import { Dashboard } from "./components/dashboard/dashboard"
 import { HistoryView } from "./components/history/history-view"
@@ -10,8 +15,6 @@ import {
   type SettingsSaveState,
 } from "./components/settings/settings-form"
 import { DaySummaryDialog } from "./components/dialogs/day-summary-dialog"
-
-type UpdateInfo = { version: string; releaseUrl: string }
 
 const TITLES: Record<Page, string> = {
   dashboard: "Dein Arbeitstag",
@@ -35,6 +38,9 @@ export function App() {
       // Dashboard immer laden: Erinnerungen müssen auf jeder Seite erscheinen.
       setDashboard(await window.adhdworker.getDashboard())
       if (page === "history") setHistory(await window.adhdworker.getHistory())
+      // Werte können sich außerhalb des Formulars ändern (z. B. gemerkte Pausenzeit).
+      if (page === "settings")
+        setSettings(await window.adhdworker.getSettings())
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -140,16 +146,37 @@ export function App() {
         <section className="update-banner" role="status">
           <Download />
           <div>
-            <strong>ADHDWorker {update.version} ist bereit.</strong>
-            <p>Eine neue Version wartet auf GitHub.</p>
+            <strong>
+              ADHDWorker {update.version}{" "}
+              {update.state === "downloading"
+                ? "wird geladen …"
+                : "ist bereit."}
+            </strong>
+            <p>
+              {update.state === "ready"
+                ? "Wird beim Beenden automatisch installiert."
+                : update.state === "downloading"
+                  ? "Das Update lädt im Hintergrund."
+                  : "Eine neue Version wartet auf GitHub."}
+            </p>
           </div>
-          <button
-            type="button"
-            className="update-link"
-            onClick={() => window.adhdworker.openReleasePage()}
-          >
-            Release öffnen
-          </button>
+          {update.state === "ready" ? (
+            <button
+              type="button"
+              className="update-link"
+              onClick={() => window.adhdworker.installUpdate()}
+            >
+              Jetzt neu starten
+            </button>
+          ) : update.state === "available" ? (
+            <button
+              type="button"
+              className="update-link"
+              onClick={() => window.adhdworker.openReleasePage()}
+            >
+              Release öffnen
+            </button>
+          ) : null}
           <button
             type="button"
             className="update-dismiss"

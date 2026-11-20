@@ -41,18 +41,20 @@ Installer kann einen Desktop- und Startmenüeintrag anlegen. Die lokale SQLite-
 Datenbank liegt weiterhin im Electron-`userData`-Ordner und bleibt bei Updates
 und einer Deinstallation erhalten.
 
-Releases entstehen automatisch durch einen Git-Tag wie `v0.1.0`:
+Releases entstehen nur durch einen Versions-Tag. Ein normaler Push auf `main`
+führt nur Lint, Typecheck, Tests und Smoke-Test aus.
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+npm version patch   # oder minor/major: erhöht die Version, committet und taggt
+git push --follow-tags
 ```
 
-GitHub Actions prüft den Build und hängt Installer sowie portable EXE an das
-GitHub Release. Die App weist bei einer neueren stabilen GitHub-Version nur auf
-die Download-Seite hin; sie installiert Updates nicht selbst. Die erste Version
-ist nicht code-signiert, daher kann Windows SmartScreen beim ersten Download
-warnen.
+GitHub Actions baut dann Installer und portable EXE und hängt sie samt
+`latest.yml` an das Release. Die **installierte** App lädt neue Versionen im
+Hintergrund und installiert sie beim Beenden (oder per „Jetzt neu starten“).
+Die **portable** EXE kann sich nicht selbst ersetzen und zeigt nur einen Link.
+Die App ist nicht code-signiert, daher kann Windows SmartScreen beim ersten
+Download warnen.
 
 ## Daten und Einstellungen
 
@@ -60,6 +62,9 @@ Beim Start wird die SQLite-Datei automatisch unter Electron-`userData` angelegt
 und die Prisma-Migration ausgeführt. Die Entwicklungsdatenbank für `smoke` liegt
 unter `prisma/dev.db` und wird nicht versioniert. Bestehende MariaDB-Daten
 werden nicht importiert oder verändert.
+
+Bei jedem Start legt die App einmal pro Tag eine Sicherung der Datenbank unter
+`userData/backups/` an (vor den Migrationen) und behält die letzten 14 Tage.
 
 Telegram-Token und Chat-ID können in der App gespeichert werden. Der Token bleibt
 im Main-Prozess und wird nie an den React-Renderer übergeben.
@@ -77,9 +82,13 @@ TELEGRAM_CHAT_ID=""
 ```bash
 npm run lint
 npm run typecheck
+npm test
 npm run build
 npm run smoke
 ```
+
+`npm test` führt die Vitest-Unit-Tests in `tests/` aus (Tagesplan,
+Tagesabschluss, Erinnerungslogik, Zeit-Helfer).
 
 Der Smoke-Test spielt einen ganzen Tag gegen SQLite durch: vorgemerkte
 Anmeldung, flexible Pause, verspätete Rückkehr, Feierabend nach Soll-Stunden,

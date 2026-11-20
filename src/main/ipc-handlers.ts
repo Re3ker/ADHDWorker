@@ -2,14 +2,20 @@ import { ipcMain, shell } from "electron"
 import { z } from "zod"
 
 import { afterAction, sendTelegram } from "./action-runner"
-import { currentReminder, skipReminderToday, snoozeReminder } from "./reminders"
+import {
+  currentReminder,
+  skippedToday,
+  skipReminderToday,
+  snoozeReminder,
+  unskipReminder,
+} from "./reminders"
 import {
   getSettings,
   serializeSettings,
   updateSettings,
 } from "./settings-service"
 import { resetTelegramMessage } from "./telegram"
-import { getAvailableUpdate } from "./update-service"
+import { getAvailableUpdate, installUpdate } from "./update-service"
 import {
   applyLaunchAtLogin,
   emitChanged,
@@ -29,6 +35,7 @@ import {
   runPendingNow,
   serializeWorkday,
   setTodayPause,
+  adjustTime,
   updateTask,
 } from "./workday-service"
 import { actionTypeSchema, idSchema, previewSchema } from "../shared/schemas"
@@ -84,6 +91,7 @@ async function dashboardData(): Promise<DashboardData> {
       },
     },
     reminder,
+    skippedReminders: skippedToday(),
   }
 }
 
@@ -96,6 +104,7 @@ export function registerIpc() {
     serializeSettings(await getSettings())
   )
   ipcMain.handle("app:get-update", () => getAvailableUpdate())
+  ipcMain.handle("app:install-update", () => installUpdate())
   ipcMain.handle("app:open-release-page", () => {
     const update = getAvailableUpdate()
     if (update) void shell.openExternal(update.releaseUrl)
@@ -126,7 +135,11 @@ export function registerIpc() {
   action("reminder:skip", async (type) =>
     skipReminderToday(actionTypeSchema.parse(type))
   )
+  action("reminder:unskip", async (type) =>
+    unskipReminder(actionTypeSchema.parse(type))
+  )
   action("day:set-pause", (input) => setTodayPause(input))
+  action("day:adjust-time", (input) => adjustTime(input))
 
   action("task:create", (input) => createTask(input))
   action("task:update", (input) => updateTask(input))

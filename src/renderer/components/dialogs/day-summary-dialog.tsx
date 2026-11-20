@@ -13,7 +13,7 @@ export function DaySummaryDialog({
   workday: WorkdayData
   onClose: () => void
 }) {
-  const blocks = createDayBlocks(workday.sessions)
+  const blocks = createDayBlocks(workday.sessions, workday.tasks)
   return (
     <Dialog
       wide
